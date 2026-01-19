@@ -39,7 +39,7 @@ TABULAR_FILES = {
     "41283_HES_SimDates.tsv": "5c35335d9e91f1eb4c0dca92213f6cb9",
     "bulk_strings.tsv": "7e7ec9ba895eaf465cb766cddcf29a72",
     "dates_death.tsv": "44af5c5d7bf4c4a6ca8fcdaa5329c9ec",
-    "datetime_fields_2.tsv": "0f50afe3426dca8c9a23ee41df0c8e3",
+    "datetime_fields_2.tsv": "0f50afe342c6dca8c9a23ee41df0c8e3",
     "datetime_fields.tsv": "708dff0bf4989c50cad25f7ffd15623b",
     "fo_fields_trimmed.tsv": "ff0689f3629da3cd46097199f59db826",
     "integer_arrays_part1.tsv": "47e4214a945327914d5a82189cf0c560",
@@ -50,7 +50,7 @@ TABULAR_FILES = {
     "oaa_fields.tsv": "7701c46303680aa3f06c4e85b2babf35",
     "real_fields1.tsv": "f63dd2423b242f6c00ebee665190265b",
     "real_fields2.tsv": "6a32a2d4341d8abedd31303ec25915e9",
-    "string_fields1.tsv": "b3275f5edbfc7693b1a53379f1bd899e7",
+    "string_fields1.tsv": "b327f5edbfc7693b1a53379f1bd899e7",
     "string_fields2.tsv": "3220e8fbdeffd86ebe56356b1d53fbae",
     "tabular.md5": "dc5fafa749070aafcff6f1b87d889836",
 }
@@ -210,6 +210,8 @@ def download_file(
     category: Optional[str] = None,
     verify_md5: bool = True,
     overwrite: bool = False,
+    file_index: Optional[int] = None,
+    total_files: Optional[int] = None,
 ) -> Path:
     """
     Download a single file from the UK Biobank Synthetic Dataset.
@@ -221,6 +223,8 @@ def download_file(
                  If None, searches all categories.
         verify_md5: If True, verify MD5 checksum after download
         overwrite: If True, overwrite existing files
+        file_index: Optional file index for progress display (e.g., 5)
+        total_files: Optional total number of files for progress display (e.g., 23)
     
     Returns:
         Path: Path to downloaded file
@@ -266,12 +270,15 @@ def download_file(
     if file_path.exists() and not overwrite:
         if verify_md5:
             if _verify_md5(file_path, expected_md5):
-                print(f"  ✓ {filename} (already exists and verified)")
+                counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+                print(f"  {counter_str}✓ {filename} (already exists and verified)")
                 return file_path
             else:
-                print(f"  ⚠ {filename} (exists but MD5 mismatch, re-downloading)")
+                counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+                print(f"  {counter_str}⚠ {filename} (exists but MD5 mismatch, re-downloading)")
         else:
-            print(f"  ✓ {filename} (already exists)")
+            counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+            print(f"  {counter_str}✓ {filename} (already exists)")
             return file_path
     
     # Download the file
@@ -291,7 +298,9 @@ def download_file(
         # Fallback: try without subdirectory (for backwards compatibility)
         url = urljoin(BASE_URL, filename)
     
-    print(f"  ↓ {filename}...", end=" ", flush=True)
+    # Display progress counter if provided
+    counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+    print(f"  {counter_str}↓ {filename}...", end=" ", flush=True)
     
     try:
         response = requests.get(url, stream=True, timeout=30)
@@ -311,11 +320,13 @@ def download_file(
             if _verify_md5(file_path, expected_md5):
                 print("✓ (verified)")
             else:
-                print("✗ (MD5 mismatch!)")
+                # Calculate actual MD5 before deleting the file
+                actual_md5 = _calculate_md5(file_path)
                 file_path.unlink()  # Delete corrupted file
+                print("✗ (MD5 mismatch!)")
                 raise ValueError(
                     f"MD5 checksum mismatch for {filename}. "
-                    f"Expected: {expected_md5}, Got: {_calculate_md5(file_path)}"
+                    f"Expected: {expected_md5}, Got: {actual_md5}"
                 )
         else:
             print("✓")
@@ -362,16 +373,26 @@ def download_category(
     
     files = ALL_CATEGORIES[category]
     file_list = [f for f in files.keys() if not (skip_md5_files and f.endswith(".md5"))]
+    total_files = len(file_list)
     
-    print(f"\nDownloading {category} category ({len(file_list)} files)")
+    print(f"\nDownloading {category} category ({total_files} files)")
     print(f"Output directory: {output_dir}")
     print("=" * 60)
     
-    for filename in file_list:
+    for idx, filename in enumerate(file_list, start=1):
         try:
-            download_file(filename, output_dir, category=category, verify_md5=verify_md5, overwrite=overwrite)
+            download_file(
+                filename,
+                output_dir,
+                category=category,
+                verify_md5=verify_md5,
+                overwrite=overwrite,
+                file_index=idx,
+                total_files=total_files,
+            )
         except Exception as e:
-            print(f"  ✗ Failed to download {filename}: {e}")
+            counter_str = f"[{idx}/{total_files}] " if total_files > 0 else ""
+            print(f"  {counter_str}✗ Failed to download {filename}: {e}")
             raise
     
     print(f"\n✓ Downloaded {len(file_list)} files to {output_dir}")
