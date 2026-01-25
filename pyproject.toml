@@ -32,11 +32,49 @@ dependencies = [
     "pandas>=1.5.0",
     "polars>=0.19.0",
     "requests>=2.28.0",
+    "matplotlib>=3.5.0",
+    "tiktoken>=0.6.0",
+    "torch",
+    "torchvision",
+    "transformers>=4.50.0",
+    "accelerate",
+    "bitsandbytes",
+    "biomcp-python",
 ]
 
 [project.optional-dependencies]
 aws = [
     "boto3>=1.26.0",
+]
+genomics = [
+    "numpy>=1.20.0",
+]
+imaging = [
+    "pydicom>=2.4.0",
+]
+tracking = [
+    "wandb>=0.16.0",
+]
+snomed = [
+    "faiss-cpu>=1.7.0",
+    "faiss-gpu>=1.7.0",
+    "numpy>=1.20.0",
+]
+visualization = [
+    "pyvis>=0.3.0",
+    "networkx>=2.8.0",
+]
+all = [
+    "boto3>=1.26.0",
+    "numpy>=1.20.0",
+    "pydicom>=2.4.0",
+    "wandb>=0.16.0",
+    "tqdm>=4.60.0",
+    "tiktoken>=0.6.0",
+    "faiss-cpu>=1.7.0",
+    "faiss-gpu>=1.7.0",
+    "pyvis>=0.3.0",
+    "networkx>=2.8.0",
 ]
 
 [project.urls]

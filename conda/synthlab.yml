@@ -12,6 +12,15 @@ dependencies:
   - notebook
   - ipykernel
   - ipywidgets
+  - matplotlib
+  - faiss-gpu>=1.7.0
   - pip:
     - boto3>=1.26.0  # Optional: for AWS dataset download
     - requests>=2.28.0  # For UK Biobank Synthetic Dataset downloads
+    - tiktoken>=0.6.0
+    - torch
+    - torchvision
+    - transformers>=4.50.0
+    - accelerate
+    - bitsandbytes
+    - biomcp-python

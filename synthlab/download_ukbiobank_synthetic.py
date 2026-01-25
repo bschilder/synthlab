@@ -15,6 +15,7 @@ Dataset URL: https://biobank.ndph.ox.ac.uk/synthetic_dataset/
 import hashlib
 import os
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin
@@ -23,6 +24,12 @@ try:
     import requests
 except ImportError:
     requests = None
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
 
 
 BASE_URL = "https://biobank.ndph.ox.ac.uk/synthetic_dataset/"
@@ -42,7 +49,7 @@ TABULAR_FILES = {
     "datetime_fields_2.tsv": "0f50afe342c6dca8c9a23ee41df0c8e3",
     "datetime_fields.tsv": "708dff0bf4989c50cad25f7ffd15623b",
     "fo_fields_trimmed.tsv": "ff0689f3629da3cd46097199f59db826",
-    "integer_arrays_part1.tsv": "47e4214a945327914d5a82189cf0c560",
+    "integer_arrays_part1.tsv": "47e4214a945327914d5a82189cf0d560",
     "integer_arrays_part2.tsv": "1630aa738230ea4d5a28cf91f3c66f6d",
     "integer_diet_quest_fields.tsv": "86944f36c7ea72b397e5740f7ee6453a",
     "integer_no_arrays.tsv": "d57178f580c9bd90ba7f33a9c371a894",
@@ -182,6 +189,83 @@ def _verify_md5(file_path: Path, expected_md5: str) -> bool:
     return actual_md5.lower() == expected_md5.lower()
 
 
+def _check_aria2c() -> bool:
+    """Check if aria2c is available."""
+    try:
+        result = subprocess.run(
+            ["aria2c", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _check_wget() -> bool:
+    """Check if wget is available."""
+    try:
+        result = subprocess.run(
+            ["wget", "--version"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _download_with_aria2c(
+    url: str,
+    output_path: Path,
+    connections: int = 8,
+    quiet: bool = False,
+) -> bool:
+    """
+    Download a file using aria2c with multiple connections.
+
+    aria2c can download different parts of a file simultaneously,
+    which dramatically speeds up downloads from slow servers.
+    """
+    cmd = [
+        "aria2c",
+        "-x", str(connections),  # Max connections per server
+        "-s", str(connections),  # Split file into N parts
+        "-k", "1M",              # Min split size
+        "-d", str(output_path.parent),
+        "-o", output_path.name,
+        "--auto-file-renaming=false",
+        "--allow-overwrite=true",
+    ]
+    if quiet:
+        cmd.append("--quiet")
+    cmd.append(url)
+
+    result = subprocess.run(cmd, capture_output=quiet, text=True)
+    return result.returncode == 0
+
+
+def _download_with_wget(
+    url: str,
+    output_path: Path,
+    quiet: bool = False,
+) -> bool:
+    """Download a file using wget with resume support."""
+    cmd = [
+        "wget",
+        "-c",  # Continue/resume
+        "-O", str(output_path),
+    ]
+    if quiet:
+        cmd.append("-q")
+    else:
+        cmd.append("--show-progress")
+    cmd.append(url)
+
+    result = subprocess.run(cmd, capture_output=quiet, text=True)
+    return result.returncode == 0
+
+
 def list_available_files(category: Optional[str] = None):
     """
     List available files in the UK Biobank Synthetic Dataset.
@@ -212,10 +296,14 @@ def download_file(
     overwrite: bool = False,
     file_index: Optional[int] = None,
     total_files: Optional[int] = None,
+    show_progress: bool = True,
+    _quiet: bool = False,
+    backend: str = "auto",
+    aria2c_connections: int = 8,
 ) -> Path:
     """
     Download a single file from the UK Biobank Synthetic Dataset.
-    
+
     Args:
         filename: Name of the file to download
         output_dir: Directory to save the file. If None, uses ~/.cache/synthlab/ukbiobank_synthetic/{category}/
@@ -225,7 +313,15 @@ def download_file(
         overwrite: If True, overwrite existing files
         file_index: Optional file index for progress display (e.g., 5)
         total_files: Optional total number of files for progress display (e.g., 23)
-    
+        show_progress: If True and tqdm is installed, show download progress bar
+        _quiet: Internal flag for parallel downloads - suppresses print output
+        backend: Download backend to use:
+            - "auto": Try aria2c, then wget, then requests (default)
+            - "aria2c": Use aria2c (fastest, uses multiple connections per file)
+            - "wget": Use wget (good resume support)
+            - "requests": Use Python requests library
+        aria2c_connections: Number of connections per file for aria2c (default: 8)
+
     Returns:
         Path: Path to downloaded file
     """
@@ -270,15 +366,18 @@ def download_file(
     if file_path.exists() and not overwrite:
         if verify_md5:
             if _verify_md5(file_path, expected_md5):
-                counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
-                print(f"  {counter_str}✓ {filename} (already exists and verified)")
+                if not _quiet:
+                    counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+                    print(f"  {counter_str}✓ {filename} (already exists and verified)")
                 return file_path
             else:
-                counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
-                print(f"  {counter_str}⚠ {filename} (exists but MD5 mismatch, re-downloading)")
+                if not _quiet:
+                    counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+                    print(f"  {counter_str}⚠ {filename} (exists but MD5 mismatch, re-downloading)")
         else:
-            counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
-            print(f"  {counter_str}✓ {filename} (already exists)")
+            if not _quiet:
+                counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
+                print(f"  {counter_str}✓ {filename} (already exists)")
             return file_path
     
     # Download the file
@@ -300,43 +399,100 @@ def download_file(
     
     # Display progress counter if provided
     counter_str = f"[{file_index}/{total_files}] " if file_index is not None and total_files is not None else ""
-    print(f"  {counter_str}↓ {filename}...", end=" ", flush=True)
-    
-    try:
-        response = requests.get(url, stream=True, timeout=30)
-        response.raise_for_status()
-        
-        total_size = int(response.headers.get("content-length", 0))
-        downloaded = 0
-        
-        with open(file_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-        
-        # Verify MD5 if requested
-        if verify_md5:
-            if _verify_md5(file_path, expected_md5):
-                print("✓ (verified)")
-            else:
-                # Calculate actual MD5 before deleting the file
-                actual_md5 = _calculate_md5(file_path)
-                file_path.unlink()  # Delete corrupted file
-                print("✗ (MD5 mismatch!)")
-                raise ValueError(
-                    f"MD5 checksum mismatch for {filename}. "
-                    f"Expected: {expected_md5}, Got: {actual_md5}"
-                )
+
+    # Determine which backend to use
+    use_backend = backend
+    if backend == "auto":
+        if _check_aria2c():
+            use_backend = "aria2c"
+        elif _check_wget():
+            use_backend = "wget"
         else:
-            print("✓")
-        
-        return file_path
-    
-    except requests.exceptions.RequestException as e:
-        if file_path.exists():
+            use_backend = "requests"
+
+    download_success = False
+
+    if use_backend == "aria2c":
+        if not _quiet:
+            print(f"  {counter_str}↓ {filename} (aria2c, {aria2c_connections} connections)...")
+        download_success = _download_with_aria2c(url, file_path, aria2c_connections, quiet=_quiet)
+        if not download_success:
+            if file_path.exists():
+                file_path.unlink()
+            raise RuntimeError(f"aria2c failed to download {filename}")
+
+    elif use_backend == "wget":
+        if not _quiet:
+            print(f"  {counter_str}↓ {filename} (wget)...")
+        download_success = _download_with_wget(url, file_path, quiet=_quiet)
+        if not download_success:
+            if file_path.exists():
+                file_path.unlink()
+            raise RuntimeError(f"wget failed to download {filename}")
+
+    else:  # requests
+        _check_requests()
+        try:
+            response = requests.get(url, stream=True, timeout=(10, 300))  # type: ignore[union-attr]
+            response.raise_for_status()
+
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
+
+            # Use tqdm for progress bar if available and not in quiet mode
+            use_progress_bar = show_progress and HAS_TQDM and total_size > 0 and not _quiet
+
+            pbar = None
+            if use_progress_bar:
+                pbar = tqdm(
+                    total=total_size,
+                    unit="B",
+                    unit_scale=True,
+                    desc=f"{counter_str}{filename}",
+                    leave=True,
+                )
+            elif not _quiet:
+                size_mb = total_size / (1024 * 1024) if total_size > 0 else 0
+                print(f"  {counter_str}↓ {filename} ({size_mb:.1f} MB)...", end=" ", flush=True)
+
+            with open(file_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if pbar is not None:
+                            pbar.update(len(chunk))
+
+            if pbar is not None:
+                pbar.close()
+            download_success = True
+
+        except Exception as e:
+            if file_path.exists():
+                file_path.unlink()
+            raise RuntimeError(f"Failed to download {filename}: {e}") from e
+
+    # Verify MD5 if requested
+    if verify_md5:
+        if _verify_md5(file_path, expected_md5):
+            if not _quiet and use_backend == "requests":
+                print("✓ (verified)")
+            elif not _quiet:
+                print(f"  {counter_str}✓ {filename} (verified)")
+        else:
+            actual_md5 = _calculate_md5(file_path)
             file_path.unlink()
-        raise RuntimeError(f"Failed to download {filename}: {e}") from e
+            if not _quiet:
+                print(f"  {counter_str}✗ {filename} (MD5 mismatch!)")
+            raise ValueError(
+                f"MD5 checksum mismatch for {filename}. "
+                f"Expected: {expected_md5}, Got: {actual_md5}"
+            )
+    else:
+        if not _quiet and use_backend == "requests":
+            print("✓")
+
+    return file_path
 
 
 def download_category(
@@ -345,17 +501,23 @@ def download_category(
     verify_md5: bool = True,
     overwrite: bool = False,
     skip_md5_files: bool = True,
+    max_workers: int = 4,
+    backend: str = "auto",
+    aria2c_connections: int = 8,
 ) -> Path:
     """
     Download all files in a category.
-    
+
     Args:
         category: Category to download ('tabular', 'medical', 'genetic', 'bulk')
         output_dir: Directory to save files. If None, uses ~/.cache/synthlab/ukbiobank_synthetic/{category}/
         verify_md5: If True, verify MD5 checksums after download
         overwrite: If True, overwrite existing files
         skip_md5_files: If True, skip downloading MD5 checksum files
-    
+        max_workers: Number of parallel download threads (default: 4). Set to 1 for sequential.
+        backend: Download backend - "auto", "aria2c", "wget", or "requests"
+        aria2c_connections: Number of connections per file for aria2c (default: 8)
+
     Returns:
         Path: Path to output directory
     """
@@ -364,37 +526,107 @@ def download_category(
             f"Unknown category: {category}. "
             f"Must be one of: {list(ALL_CATEGORIES.keys())}"
         )
-    
+
     if output_dir is None:
         output_dir = get_cache_dir() / category
     else:
         output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     files = ALL_CATEGORIES[category]
     file_list = [f for f in files.keys() if not (skip_md5_files and f.endswith(".md5"))]
     total_files = len(file_list)
-    
+
+    # Determine actual backend that will be used
+    actual_backend = backend
+    if backend == "auto":
+        if _check_aria2c():
+            actual_backend = "aria2c"
+        elif _check_wget():
+            actual_backend = "wget"
+        else:
+            actual_backend = "requests"
+
     print(f"\nDownloading {category} category ({total_files} files)")
     print(f"Output directory: {output_dir}")
+    print(f"Download backend: {actual_backend}" + (f" ({aria2c_connections} connections/file)" if actual_backend == "aria2c" else ""))
+    if max_workers > 1 and actual_backend == "requests":
+        print(f"Parallel downloads: {max_workers} threads")
     print("=" * 60)
-    
-    for idx, filename in enumerate(file_list, start=1):
-        try:
-            download_file(
-                filename,
-                output_dir,
-                category=category,
-                verify_md5=verify_md5,
-                overwrite=overwrite,
-                file_index=idx,
-                total_files=total_files,
-            )
-        except Exception as e:
-            counter_str = f"[{idx}/{total_files}] " if total_files > 0 else ""
-            print(f"  {counter_str}✗ Failed to download {filename}: {e}")
-            raise
-    
+
+    if max_workers == 1:
+        # Sequential download (original behavior)
+        for idx, filename in enumerate(file_list, start=1):
+            try:
+                download_file(
+                    filename,
+                    output_dir,
+                    category=category,
+                    verify_md5=verify_md5,
+                    overwrite=overwrite,
+                    file_index=idx,
+                    total_files=total_files,
+                    backend=backend,
+                    aria2c_connections=aria2c_connections,
+                )
+            except Exception as e:
+                counter_str = f"[{idx}/{total_files}] " if total_files > 0 else ""
+                print(f"  {counter_str}✗ Failed to download {filename}: {e}")
+                raise
+    else:
+        # Parallel downloads
+        completed = 0
+        failed: list[tuple[str, str]] = []
+
+        def _download_one(filename: str) -> tuple[str, bool, str]:
+            """Download a single file, return (filename, success, error_msg)."""
+            try:
+                download_file(
+                    filename,
+                    output_dir,
+                    category=category,
+                    verify_md5=verify_md5,
+                    overwrite=overwrite,
+                    show_progress=False,  # Disable per-file progress in parallel mode
+                    _quiet=True,
+                    backend=backend,
+                    aria2c_connections=aria2c_connections,
+                )
+                return (filename, True, "")
+            except Exception as e:
+                return (filename, False, str(e))
+
+        # Use tqdm for overall progress if available
+        if HAS_TQDM:
+            with tqdm(total=total_files, desc="Downloading", unit="file") as pbar:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = {executor.submit(_download_one, f): f for f in file_list}
+                    for future in as_completed(futures):
+                        filename, success, error_msg = future.result()
+                        if success:
+                            completed += 1
+                        else:
+                            failed.append((filename, error_msg))
+                        pbar.update(1)
+                        pbar.set_postfix({"done": completed, "failed": len(failed)})
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_download_one, f): f for f in file_list}
+                for future in as_completed(futures):
+                    filename, success, error_msg = future.result()
+                    if success:
+                        completed += 1
+                        print(f"  [{completed}/{total_files}] ✓ {filename}")
+                    else:
+                        failed.append((filename, error_msg))
+                        print(f"  ✗ {filename}: {error_msg}")
+
+        if failed:
+            print(f"\n⚠ {len(failed)} files failed to download:")
+            for filename, error_msg in failed:
+                print(f"    - {filename}: {error_msg}")
+            raise RuntimeError(f"Failed to download {len(failed)} files")
+
     print(f"\n✓ Downloaded {len(file_list)} files to {output_dir}")
     return output_dir
 
