@@ -227,8 +227,13 @@ class SOAPNote:
                 lines.append("")
                 lines.append("### Edges")
                 for edge in self.grounded_causal_graph.edges:
-                    # Format: Source --relation--> Target
-                    lines.append(f"- {edge.source.term} --{edge.relation}--> {edge.target.term}")
+                    # Format: Source RELATION Target
+                    if edge.is_interaction:
+                        op = " && " if edge.interaction == "and" else " || "
+                        source_str = op.join(s.term for s in edge.sources)
+                    else:
+                        source_str = edge.source.term if edge.source else "?"
+                    lines.append(f"- {source_str} {edge.relation} {edge.target.term}")
                 lines.append("")
             elif self.causal_graph:
                 lines.extend(["## Causal Graph", self.causal_graph, ""])
@@ -1893,55 +1898,16 @@ Conditions likely to progress, preventive interventions, screening needs.
         include_causal_graph: bool = True,
     ) -> str:
         """Build direct (non-hierarchical) prompt with conditional sections."""
-        image_note = f" {num_images} medical image(s) attached - analyze them." if include_images else ""
-        imaging_section = self._IMAGING_SECTION if include_images else ""
-        causal_section = self._CAUSAL_GRAPH_SECTION if include_causal_graph else ""
-        # Include genetics in assessment when genomics are inline (separate_genetics=False)
-        genetics_section = self._GENETICS_ASSESSMENT_SECTION if (self.use_biomcp and not self.separate_genetics) else ""
+        # Simplified user prompt - detailed template is in system prompt
+        image_note = f"\n\n{num_images} medical image(s) are attached after this text. Include imaging findings in the Objective section." if include_images else ""
+        causal_note = "\n\nInclude a Causal Graph section at the end." if include_causal_graph else ""
+        genetics_note = "\n\nInclude genetic risk assessment in the Assessment section." if (self.use_biomcp and not self.separate_genetics) else ""
 
-        return f"""Generate a SOAP note from this patient record.{image_note}
+        return f"""Generate a SOAP note for this patient. Output the SOAP note directly. Do NOT describe your approach or thinking process - just write the note.
 
 === PATIENT DATA ===
 {patient_data}
-
-=== END OF INPUT DATA ===
-
-Generate a SOAP note using the exact markdown format below.
-
-# Patient Story
-1-2 paragraph narrative of the patient's health journey chronologically.
-
-# Subjective
-Patient-reported symptoms, complaints, and relevant history:
-- Chief complaints
-- History of present illness
-- Social/family history
-
-# Objective
-Clinical findings:
-- Vital signs (BP, HR, temp, weight, BMI)
-- Physical exam findings
-- Laboratory results (highlight abnormal values){imaging_section}
-
-# Assessment
-Clinical reasoning:
-1. **Primary diagnoses** - Active conditions
-2. **Disease progression** - How conditions evolved
-3. **Risk factors** - Modifiable and non-modifiable{genetics_section}
-
-# Plan
-Treatment and follow-up:
-1. Medications
-2. Monitoring (labs, imaging)
-3. Lifestyle modifications
-4. Referrals
-5. Follow-up timing
-
-# Future Considerations
-Conditions to monitor, preventive interventions, screening needs.
-
-# Summary
-2-3 sentences on critical findings and recommendations.{causal_section}"""
+=== END ==={image_note}{genetics_note}{causal_note}"""
 
     CAUSAL_GRAPH_PROMPT = """Generate causal relationships for this patient.
 
@@ -1952,7 +1918,7 @@ Conditions to monitor, preventive interventions, screening needs.
 Output relationships for THIS patient's actual conditions and treatments:"""
 
     # Two-stage grounded causal graph prompts
-    ENTITY_EXTRACTION_PROMPT = """Extract medical entities from this SOAP note for SNOMED grounding.
+    ENTITY_EXTRACTION_PROMPT = """Extract the most clinically significant medical entities from this SOAP note.
 
 === SOAP NOTE ===
 {soap_note}
@@ -1960,14 +1926,15 @@ Output relationships for THIS patient's actual conditions and treatments:"""
 
 RULES:
 1. Extract each unique entity ONLY ONCE (no duplicates)
-2. Use standard medical terminology
-3. Include: conditions, medications, procedures, symptoms, findings, lifestyle factors, genetic factors
-4. Exclude: patient names, dates, locations, non-medical text
-5. If no medical content, output "NO_ENTITIES"
+2. Focus on the 30-50 MOST IMPORTANT entities for understanding this patient's health
+3. INCLUDE: diagnosed conditions, active medications, key procedures, significant symptoms, abnormal lab findings, relevant lifestyle factors, genetic variants
+4. EXCLUDE: normal findings, routine procedures, administrative terms, devices, general concepts
+5. Use standard medical terminology (e.g., "Type 2 diabetes mellitus" not "sugar problem")
+6. If no medical content, output "NO_ENTITIES"
 
-Extract entities:"""
+Extract the key medical entities (one per line):"""
 
-    GROUNDED_RELATIONSHIP_PROMPT = """Identify causal relationships for this patient using the provided SNOMED concepts.
+    GROUNDED_RELATIONSHIP_PROMPT = """Identify causal relationships between the medical concepts for this patient.
 
 === PATIENT CLINICAL SUMMARY ===
 {soap_note}
@@ -1977,7 +1944,9 @@ Extract entities:"""
 {concept_list}
 === END CONCEPTS ===
 
-Output relationships relevant to THIS patient's condition progression:"""
+Output causal relationships that explain THIS patient's disease progression, treatment effects, and risk factors.
+Focus on relationships that are clinically meaningful for this specific patient.
+Output one relationship per line using EXACTLY the concept labels shown above:"""
 
     # Genetic interpretation prompt (separate agent to avoid output truncation)
     GENETIC_SUMMARY_PROMPT = """You are a clinical geneticist interpreting genetic test results for a patient.
@@ -2123,10 +2092,17 @@ GENETIC INTERPRETATION:"""
                         probability >= top_p. Only used when do_sample=True. If None, use
                         model's default.
         """
-        # Load .env file if present (for API keys like GOOGLE_API_KEY)
+        # Load .env file if present (for API keys like GOOGLE_API_KEY, ONCOKB_TOKEN)
         try:
             from dotenv import load_dotenv
+            from pathlib import Path
+            # Try loading from current directory first
             load_dotenv()
+            # Also try loading from project root (where synthlab is installed)
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            if env_file.exists():
+                load_dotenv(env_file)
         except ImportError:
             pass  # dotenv not installed, skip
 
@@ -2874,11 +2850,12 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             })
 
         # Build user message content - always use list format for MedGemma
+        # Text FIRST, then images - helps model retain context from clinical data
         content = []
+        content.append({"type": "text", "text": prompt})
         if images:
             for img in images:
                 content.append({"type": "image", "image": img})
-        content.append({"type": "text", "text": prompt})
         messages.append({"role": "user", "content": content})
 
         # Build generate kwargs - only include non-None values to let model use defaults
@@ -3550,7 +3527,7 @@ BRCA1 mutation"""
                     # Validate entity: reasonable length, not just punctuation
                     if line and len(line) > 2 and len(line) < 100 and any(c.isalpha() for c in line):
                         entities.append(line)
-                        entity_types[line] = "unknown"  # Type will be inferred from SNOMED
+                        entity_types[line] = None  # Will use SNOMED semantic_type
 
             if self.verbose:
                 print(f"    Extracted {len(entities)} entities")
@@ -3586,9 +3563,27 @@ BRCA1 mutation"""
             # Reject obviously generic/garbage terms that indicate poor entity extraction
             # These are meta-terms, not actual medical concepts
             generic_terms_to_reject = {
-                "thought", "identified", "assessment",
-                "observation", "event", "situation", "context",
-                "unknown", "other", "unspecified", "general",
+                # Meta-terms
+                "thought", "identified", "assessment", "observation", "event",
+                "situation", "context", "unknown", "other", "unspecified", "general",
+                # Technical/non-medical terms that often appear in SNOMED
+                "transformer", "generator", "cleaner", "translator", "classified",
+                "initial", "artificial", "linear", "calculus", "stat", "vectors",
+                "matrix", "tau", "distributions", "emission", "backward", "forward",
+                "differential", "gradient", "cluster", "dilution", "stabilization",
+                # Devices not relevant to patient care (unless explicitly mentioned)
+                "mobile phone", "wearable", "massager", "telecommunication", "server",
+                # Organisms (unless infection-related)
+                "clostridium", "naegleria", "bryonal", "biogroup",
+                # Administrative/process terms
+                "services", "service", "revision", "conversion", "processing",
+                "validation", "normalization", "activation", "information",
+            }
+
+            # Also reject concepts with certain semantic types that are rarely relevant
+            irrelevant_semantic_types = {
+                "Physical Object", "Manufactured Object", "Geographic Area",
+                "Language", "Occupation", "Organism", "Qualifier Value",
             }
 
             for entity_name, matches in results:
@@ -3601,8 +3596,14 @@ BRCA1 mutation"""
                         unmatched_entities.append(f"{entity_name} (rejected: generic term '{match.term}')")
                         continue
 
-                    # Get entity type from extraction (used for node labeling only)
-                    entity_type = entity_types.get(entity_name, "condition")
+                    # Reject concepts with irrelevant semantic types
+                    if match.semantic_type in irrelevant_semantic_types:
+                        unmatched_entities.append(f"{entity_name} (rejected: irrelevant type '{match.semantic_type}')")
+                        continue
+
+                    # Use SNOMED semantic_type for node type (e.g., "Disorder", "Procedure", etc.)
+                    # Fall back to "unknown" only if SNOMED doesn't provide a type
+                    node_type = match.semantic_type if match.semantic_type else "unknown"
 
                     matched_count += 1
                     # Avoid duplicates (same concept from different mentions)
@@ -3611,7 +3612,7 @@ BRCA1 mutation"""
                             mention=entity_name,
                             concept_id=match.concept_id,
                             term=match.term,
-                            node_type=entity_type,
+                            node_type=node_type,
                             confidence=match.score,
                         )
                     else:
@@ -3887,6 +3888,22 @@ Output one relationship per line. No other text."""
                     print(f"    Full relationship response:")
                     for line in relationship_response.strip().split("\n")[:20]:
                         print(f"      {line}")
+
+            # Deduplicate edges (same source(s) -> target with same relation)
+            seen_edges = set()
+            unique_edges = []
+            for edge in grounded_edges:
+                # Create a hashable key for the edge
+                source_ids = tuple(sorted(s.concept_id for s in edge.sources))
+                edge_key = (source_ids, edge.target.concept_id, edge.relation)
+                if edge_key not in seen_edges:
+                    seen_edges.add(edge_key)
+                    unique_edges.append(edge)
+
+            if self.verbose and len(grounded_edges) != len(unique_edges):
+                print(f"    Deduplicated: {len(grounded_edges)} -> {len(unique_edges)} edges")
+
+            grounded_edges = unique_edges
 
             # Build grounded causal graph
             grounded_graph = GroundedCausalGraph(
@@ -4348,13 +4365,19 @@ Output one relationship per line. Nothing else."""
             prompt += self._get_admission_exclusion_instruction()
 
         # System prompt to enforce SOAP note structure with detailed template
-        soap_system = """You are a clinical documentation specialist. Output SOAP notes in markdown format with EXACTLY these sections:
+        # Conditionally include genetics subsection
+        genetics_subsection = """
+4. **Genetic factors** - If genetic/genomic data is provided, summarize relevant variants and their clinical implications""" if (self.use_biomcp and not self.separate_genetics) else ""
 
-# Patient Story
-1-2 paragraph narrative of the patient's health journey chronologically.
+        soap_system = f"""You are a clinical documentation specialist. Output SOAP notes in markdown format with EXACTLY these sections.
+
+CRITICAL: Base ALL content strictly on the provided patient data. Do NOT fabricate details about family members, occupation, living situation, or any other information not explicitly stated in the input.
+
+# Patient Medical History Narrative
+1-2 paragraph chronological summary of the patient's documented medical events, diagnoses, and treatments. Include ONLY facts from the provided data.
 
 # Subjective
-Patient-reported symptoms, complaints, and relevant history (chief complaints, HPI, social/family history).
+Patient-reported symptoms, complaints, and relevant history (chief complaints, HPI, social/family history) - only if documented in the input.
 
 # Objective
 Clinical findings: vital signs, physical exam, laboratory results (highlight abnormal values), imaging findings if applicable.
@@ -4363,7 +4386,7 @@ Clinical findings: vital signs, physical exam, laboratory results (highlight abn
 Clinical reasoning with numbered subsections:
 1. **Primary diagnoses** - Active conditions
 2. **Disease progression** - How conditions evolved
-3. **Risk factors** - Modifiable and non-modifiable
+3. **Risk factors** - Modifiable and non-modifiable{genetics_subsection}
 
 # Plan
 Treatment and follow-up with numbered items:
