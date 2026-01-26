@@ -631,6 +631,7 @@ class CausalGraph:
         node_width: float = 1.2,
         node_height: float = 0.5,
         font_size: int = 9,
+        font_color: str = "#000000",
         interactive: bool = False,
         notebook: bool = True,
         height: str = "600px",
@@ -653,6 +654,7 @@ class CausalGraph:
             node_width: Width of rectangle nodes (only used if node_shape="rectangle").
             node_height: Height of rectangle nodes (only used if node_shape="rectangle").
             font_size: Font size for node labels.
+            font_color: Font color for node labels.
             interactive: If True, create an interactive visualization using pyvis.
             notebook: If True and interactive, render inline in Jupyter notebook.
             height: Height of interactive plot (e.g., "600px").
@@ -670,6 +672,7 @@ class CausalGraph:
                 notebook=notebook,
                 height=height,
                 width=width,
+                font_color=font_color,
             )
 
         try:
@@ -885,11 +888,11 @@ class CausalGraph:
                         mid = len(words) // 2
                         display_name = ' '.join(words[:mid]) + '\n' + ' '.join(words[mid:])
                 ax.text(x, y, display_name, ha='center', va='center',
-                       fontsize=font_size, fontweight='bold', color='white',
+                       fontsize=font_size, fontweight='bold', color=font_color,
                        wrap=True)
             else:
                 ax.text(x + node_width/2 + 0.1, y, node_name, ha='left', va='center',
-                       fontsize=font_size, color='#333')
+                       fontsize=font_size, color=font_color)
 
         # Add legend
         if show_legend:
@@ -974,6 +977,7 @@ class CausalGraph:
         notebook: bool = True,
         height: str = "600px",
         width: str = "100%",
+        font_color: str = "#000000",
     ):
         """
         Create an interactive visualization of the causal graph using pyvis.
@@ -1025,7 +1029,7 @@ class CausalGraph:
             directed=True,
             notebook=notebook,
             bgcolor="#ffffff",
-            font_color="#333333",
+            font_color=font_color,
         )
 
         # Configure physics for better layout
@@ -1092,7 +1096,7 @@ class CausalGraph:
                 color=color,
                 title=f"{name}\nType: {ntype.capitalize()}",
                 shape="box",
-                font={"color": "white"},
+                font={"color": font_color},
             )
 
         # Add edges

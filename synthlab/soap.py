@@ -1934,19 +1934,21 @@ RULES:
 
 Extract the key medical entities (one per line):"""
 
-    GROUNDED_RELATIONSHIP_PROMPT = """Identify causal relationships between the medical concepts for this patient.
-
-=== PATIENT CLINICAL SUMMARY ===
-{soap_note}
-=== END SUMMARY ===
-
-=== MEDICAL CONCEPTS (grounded to SNOMED CT) ===
+    GROUNDED_RELATIONSHIP_PROMPT = """CONCEPTS:
 {concept_list}
-=== END CONCEPTS ===
 
-Output causal relationships that explain THIS patient's disease progression, treatment effects, and risk factors.
-Focus on relationships that are clinically meaningful for this specific patient.
-Output one relationship per line using EXACTLY the concept labels shown above:"""
+PATIENT:
+{soap_note}
+
+TASK: List causal relationships between concepts above. Use this EXACT format:
+Concept_Name[SNOMED:ID] ++> Concept_Name[SNOMED:ID]
+
+Example output:
+Type_2_Diabetes_Mellitus[SNOMED:44054006] ++> Chronic_kidney_disease[SNOMED:709044004]
+Hypertension[SNOMED:38341003] ++> Cerebrovascular_accident[SNOMED:230690007]
+Metformin[SNOMED:372567009] --> Blood_glucose[SNOMED:33747003]
+
+Your output (one relationship per line, nothing else):"""
 
     # Genetic interpretation prompt (separate agent to avoid output truncation)
     GENETIC_SUMMARY_PROMPT = """You are a clinical geneticist interpreting genetic test results for a patient.
@@ -3676,29 +3678,18 @@ BRCA1 mutation"""
                 if len(concept_lines) > 5:
                     print(f"      ... and {len(concept_lines) - 5} more")
 
-            # System prompt to enforce structured output format with examples
-            relationship_system = """You output ONLY causal relationships. No prose, no explanations, no commentary.
+            # System prompt to enforce structured output format
+            relationship_system = """You are a medical knowledge graph extractor. Output ONLY relationships in this format:
 
-FORMAT: Source[SNOMED:ID] ARROW Target[SNOMED:ID]
+Concept[SNOMED:ID] ARROW Concept[SNOMED:ID]
 
-ARROWS:
-- ++> strongly increases risk
-- +> increases risk
-- --> treats / protects against
-- => directly causes
+Arrows: ++> (increases risk), --> (treats/protects), => (causes)
 
-INTERACTIONS:
-- A && B => C (both required)
-- A || B => C (either sufficient)
-
-EXAMPLE OUTPUT:
-Type_2_Diabetes[SNOMED:44054006] ++> Chronic_kidney_disease[SNOMED:709044004]
-Hypertension[SNOMED:38341003] ++> Stroke[SNOMED:230690007]
-Metformin[SNOMED:372567009] --> Type_2_Diabetes[SNOMED:44054006]
-Smoking[SNOMED:77176002] && Obesity[SNOMED:414916001] ++> Coronary_artery_disease[SNOMED:53741008]
-BRCA1_Mutation[SNOMED:412734009] || BRCA2_Mutation[SNOMED:412738007] || PALB2_Mutation[SNOMED:702464007] ++> Breast_Cancer[SNOMED:254837009]
-
-Output one relationship per line. Nothing else."""
+Rules:
+1. Start immediately with the first relationship
+2. One relationship per line
+3. No headers, bullets, grouping, or commentary
+4. Use exact concept labels from the input"""
 
             relationship_response = self._generate_text(
                 relationship_prompt,
