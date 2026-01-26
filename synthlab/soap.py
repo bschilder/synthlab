@@ -1943,93 +1943,31 @@ Conditions to monitor, preventive interventions, screening needs.
 # Summary
 2-3 sentences on critical findings and recommendations.{causal_section}"""
 
-    CAUSAL_GRAPH_PROMPT = """Based on this SOAP note, generate a causal graph showing medical relationships.
+    CAUSAL_GRAPH_PROMPT = """Generate causal relationships for this patient.
 
 === SOAP NOTE ===
 {soap_note}
-=== END OF SOAP NOTE ===
+=== END SOAP NOTE ===
 
-Generate DIRECT causal relationships observed in this patient, one per line.
-
-Format: Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms (e.g., Type_2_Diabetes)
-- Types: condition, medication, procedure, lifestyle, symptom, finding, genetic
-- Arrows:
-  - ++> strongly increases risk
-  - +> increases risk
-  - --> strongly protects/reduces
-  - -> protects/reduces
-  - => directly causes
-
-Joint/Interaction Effects (when BOTH factors required together):
-- A && B => C  means A AND B together cause C (neither alone is sufficient)
-- A || B => C  means A OR B can cause C (either alone is sufficient)
-
-Examples:
-Obesity[lifestyle] ++> Type_2_Diabetes[condition]
-Type_2_Diabetes[condition] ++> Diabetic_Nephropathy[condition]
-Type_2_Diabetes[condition] +> Cardiovascular_Disease[condition]
-Smoking[lifestyle] ++> COPD[condition]
-Hypertension[condition] ++> Stroke[condition]
-Hypertension[condition] ++> Chronic_Kidney_Disease[condition]
-Metformin[medication] --> Blood_Glucose[finding]
-Statin[medication] --> LDL_Cholesterol[finding]
-ACE_Inhibitor[medication] --> Blood_Pressure[finding]
-Appendicitis[condition] => Appendectomy[procedure]
-BRCA1_Mutation[genetic] ++> Breast_Cancer[condition]
-Exercise[lifestyle] --> Insulin_Resistance[finding]
-Smoking[lifestyle] && Asbestos_Exposure[lifestyle] ++> Lung_Cancer[condition]
-Obesity[lifestyle] && Sedentary_Lifestyle[lifestyle] ++> Type_2_Diabetes[condition]
-BRCA1_Mutation[genetic] || BRCA2_Mutation[genetic] || PALB2_Mutation[genetic] ++> Breast_Cancer[condition]
-Warfarin[medication] && NSAIDs[medication] ++> GI_Bleeding[condition]
-
-Write relationships for THIS patient based on their actual conditions and treatments:"""
+Output relationships for THIS patient's actual conditions and treatments:"""
 
     # Two-stage grounded causal graph prompts
     ENTITY_EXTRACTION_PROMPT = """Extract medical entities from this SOAP note for SNOMED grounding.
 
 === SOAP NOTE ===
 {soap_note}
-=== END OF SOAP NOTE ===
+=== END SOAP NOTE ===
 
 RULES:
-1. Extract each unique medical entity ONLY ONCE (no duplicates)
-2. Use standard medical terminology (will be matched to SNOMED CT)
+1. Extract each unique entity ONLY ONCE (no duplicates)
+2. Use standard medical terminology
 3. Include: conditions, medications, procedures, symptoms, findings, lifestyle factors, genetic factors
-4. Do NOT extract: patient names, dates, provider names, locations, or non-medical text
-5. If the SOAP note has no medical content, output "NO_ENTITIES"
+4. Exclude: patient names, dates, locations, non-medical text
+5. If no medical content, output "NO_ENTITIES"
 
-OUTPUT FORMAT:
-- Plain text, one entity per line
-- NO JSON, NO markdown, NO formatting
-- NO explanations, NO prose, ONLY the entity list
+Extract entities:"""
 
-EXAMPLE OUTPUT:
-Type 2 diabetes mellitus
-Hypertension
-Chronic kidney disease
-Diabetic nephropathy
-Metformin
-Lisinopril
-Atorvastatin
-Colonoscopy
-Coronary angiography
-Chest pain
-Shortness of breath
-Fatigue
-Elevated HbA1c
-Proteinuria
-Left ventricular hypertrophy
-Obesity
-Smoking
-Sedentary lifestyle
-BRCA1 mutation
-Factor V Leiden
-APOE e4 allele
-
-Extract entities (no duplicates):"""
-
-    GROUNDED_RELATIONSHIP_PROMPT = """You are analyzing a patient's clinical history to identify causal relationships.
+    GROUNDED_RELATIONSHIP_PROMPT = """Identify causal relationships for this patient using the provided SNOMED concepts.
 
 === PATIENT CLINICAL SUMMARY ===
 {soap_note}
@@ -2039,32 +1977,7 @@ Extract entities (no duplicates):"""
 {concept_list}
 === END CONCEPTS ===
 
-Based on THIS PATIENT'S history above, identify causal relationships between the concepts.
-Only include relationships that are relevant to this specific patient's condition progression.
-
-OUTPUT FORMAT (one relationship per line):
-Source[SNOMED:ID] ARROW Target[SNOMED:ID]
-
-ARROWS:
-- ++> strongly increases risk (e.g., uncontrolled diabetes ++> kidney disease)
-- +> increases risk (e.g., age +> dementia)
-- --> protects against / treats (e.g., metformin --> diabetes)
-- => directly causes (e.g., trauma => fracture)
-
-INTERACTIONS (optional):
-- A && B => C means both A and B together cause C
-- A || B => C means either A or B can cause C
-
-=== EXAMPLES ===
-Diabetes_mellitus[SNOMED:73211009] ++> Chronic_kidney_disease[SNOMED:709044004]
-Hypertension[SNOMED:38341003] ++> Stroke[SNOMED:230690007]
-Metformin[SNOMED:372567009] --> Diabetes_mellitus[SNOMED:73211009]
-Smoking[SNOMED:77176002] && Hypertension[SNOMED:38341003] ++> Coronary_artery_disease[SNOMED:53741008]
-=== END EXAMPLES ===
-
-Output ONLY relationship lines for THIS patient. No explanations or commentary.
-
-Relationships:"""
+Output relationships relevant to THIS patient's condition progression:"""
 
     # Genetic interpretation prompt (separate agent to avoid output truncation)
     GENETIC_SUMMARY_PROMPT = """You are a clinical geneticist interpreting genetic test results for a patient.
@@ -2953,8 +2866,12 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         messages = []
 
         # Add system prompt if provided (helps with structured output)
+        # Must use list format for content to match processor expectations
         if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
+            messages.append({
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}]
+            })
 
         # Build user message content - always use list format for MedGemma
         content = []
@@ -3573,10 +3490,18 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             else:
                 # Use local MedGemma model
                 entity_prompt = self.ENTITY_EXTRACTION_PROMPT.format(soap_note=soap_text)
-                entity_system = (
-                    "You output ONLY a plain text list, one item per line. "
-                    "No JSON, no markdown, no explanations, no commentary."
-                )
+                entity_system = """You output ONLY a plain text list of medical entities, one per line.
+No JSON, no markdown, no explanations, no commentary.
+
+EXAMPLE OUTPUT:
+Type 2 diabetes mellitus
+Hypertension
+Metformin
+Colonoscopy
+Chest pain
+Elevated HbA1c
+Obesity
+BRCA1 mutation"""
                 entity_response = self._generate_text(
                     entity_prompt,
                     max_new_tokens=2000,
@@ -3750,12 +3675,29 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                 if len(concept_lines) > 5:
                     print(f"      ... and {len(concept_lines) - 5} more")
 
-            # System prompt to enforce structured output format
-            relationship_system = (
-                "You output ONLY structured data in the exact format requested. "
-                "You never explain, narrate, or add commentary. "
-                "Each line of your output is a relationship in the format: Concept[SNOMED:ID] ARROW Concept[SNOMED:ID]"
-            )
+            # System prompt to enforce structured output format with examples
+            relationship_system = """You output ONLY causal relationships. No prose, no explanations, no commentary.
+
+FORMAT: Source[SNOMED:ID] ARROW Target[SNOMED:ID]
+
+ARROWS:
+- ++> strongly increases risk
+- +> increases risk
+- --> treats / protects against
+- => directly causes
+
+INTERACTIONS:
+- A && B => C (both required)
+- A || B => C (either sufficient)
+
+EXAMPLE OUTPUT:
+Type_2_Diabetes[SNOMED:44054006] ++> Chronic_kidney_disease[SNOMED:709044004]
+Hypertension[SNOMED:38341003] ++> Stroke[SNOMED:230690007]
+Metformin[SNOMED:372567009] --> Type_2_Diabetes[SNOMED:44054006]
+Smoking[SNOMED:77176002] && Obesity[SNOMED:414916001] ++> Coronary_artery_disease[SNOMED:53741008]
+BRCA1_Mutation[SNOMED:412734009] || BRCA2_Mutation[SNOMED:412738007] || PALB2_Mutation[SNOMED:702464007] ++> Breast_Cancer[SNOMED:254837009]
+
+Output one relationship per line. Nothing else."""
 
             relationship_response = self._generate_text(
                 relationship_prompt,
@@ -4213,10 +4155,32 @@ Output one relationship per line. No other text."""
                 if self.verbose:
                     print(f"  Generating separate causal graphs for {len(notes_needing_graphs)} notes...")
                 from synthlab.causal_graph import parse_causal_graph
-                graph_system = (
-                    "You output ONLY causal relationships in the format: Cause[type] ARROW Effect[type]. "
-                    "One relationship per line. No explanations, no prose, no commentary."
-                )
+                graph_system = """You output ONLY causal relationships. No prose, no explanations, no commentary.
+
+FORMAT: Cause[type] ARROW Effect[type]
+
+TYPES: condition, medication, procedure, lifestyle, symptom, finding, genetic
+
+ARROWS:
+- ++> strongly increases risk
+- +> increases risk
+- --> strongly protects/reduces
+- -> protects/reduces
+- => directly causes
+
+INTERACTIONS:
+- A && B => C (both required together)
+- A || B => C (either sufficient)
+
+EXAMPLE OUTPUT:
+Obesity[lifestyle] ++> Type_2_Diabetes[condition]
+Type_2_Diabetes[condition] ++> Diabetic_Nephropathy[condition]
+Hypertension[condition] ++> Chronic_Kidney_Disease[condition]
+Metformin[medication] --> Blood_Glucose[finding]
+Smoking[lifestyle] && Hypertension[condition] ++> Stroke[condition]
+BRCA1_Mutation[genetic] || BRCA2_Mutation[genetic] || PALB2_Mutation[genetic] ++> Breast_Cancer[condition]
+
+Output one relationship per line. Nothing else."""
                 for i, note in notes_needing_graphs:
                     graph_prompt = self.CAUSAL_GRAPH_PROMPT.format(soap_note=note.raw_response or "")
                     graph_prompt += self._get_admission_exclusion_instruction()
@@ -4383,13 +4347,39 @@ Output one relationship per line. No other text."""
         if not skip_inline_graph:
             prompt += self._get_admission_exclusion_instruction()
 
-        # System prompt to enforce SOAP note structure
-        soap_system = (
-            "You are a clinical documentation specialist. "
-            "You output SOAP notes in markdown format with exactly these headers: "
-            "# Patient Story, # Subjective, # Objective, # Assessment, # Plan, # Future Considerations, # Summary. "
-            "Each section must start with its header on its own line."
-        )
+        # System prompt to enforce SOAP note structure with detailed template
+        soap_system = """You are a clinical documentation specialist. Output SOAP notes in markdown format with EXACTLY these sections:
+
+# Patient Story
+1-2 paragraph narrative of the patient's health journey chronologically.
+
+# Subjective
+Patient-reported symptoms, complaints, and relevant history (chief complaints, HPI, social/family history).
+
+# Objective
+Clinical findings: vital signs, physical exam, laboratory results (highlight abnormal values), imaging findings if applicable.
+
+# Assessment
+Clinical reasoning with numbered subsections:
+1. **Primary diagnoses** - Active conditions
+2. **Disease progression** - How conditions evolved
+3. **Risk factors** - Modifiable and non-modifiable
+
+# Plan
+Treatment and follow-up with numbered items:
+1. Medications
+2. Monitoring (labs, imaging)
+3. Lifestyle modifications
+4. Referrals
+5. Follow-up timing
+
+# Future Considerations
+Conditions likely to progress, preventive interventions, screening needs.
+
+# Summary
+2-3 sentences on critical findings and recommendations.
+
+Each section MUST start with its header on its own line. Do not skip sections."""
 
         soap_start = time.perf_counter()
         if self.verbose:
@@ -4445,10 +4435,32 @@ Output one relationship per line. No other text."""
             graph_prompt = self.CAUSAL_GRAPH_PROMPT.format(soap_note=response)
             # Add admission exclusion instruction if needed
             graph_prompt += self._get_admission_exclusion_instruction()
-            graph_system = (
-                "You output ONLY causal relationships in the format: Cause[type] ARROW Effect[type]. "
-                "One relationship per line. No explanations, no prose, no commentary."
-            )
+            graph_system = """You output ONLY causal relationships. No prose, no explanations, no commentary.
+
+FORMAT: Cause[type] ARROW Effect[type]
+
+TYPES: condition, medication, procedure, lifestyle, symptom, finding, genetic
+
+ARROWS:
+- ++> strongly increases risk
+- +> increases risk
+- --> strongly protects/reduces
+- -> protects/reduces
+- => directly causes
+
+INTERACTIONS:
+- A && B => C (both required together)
+- A || B => C (either sufficient)
+
+EXAMPLE OUTPUT:
+Obesity[lifestyle] ++> Type_2_Diabetes[condition]
+Type_2_Diabetes[condition] ++> Diabetic_Nephropathy[condition]
+Hypertension[condition] ++> Chronic_Kidney_Disease[condition]
+Metformin[medication] --> Blood_Glucose[finding]
+Smoking[lifestyle] && Hypertension[condition] ++> Stroke[condition]
+BRCA1_Mutation[genetic] || BRCA2_Mutation[genetic] || PALB2_Mutation[genetic] ++> Breast_Cancer[condition]
+
+Output one relationship per line. Nothing else."""
             graph_start = time.perf_counter()
             causal_graph_response = self._generate_text(
                 graph_prompt,
@@ -4596,13 +4608,34 @@ Output one relationship per line. No other text."""
                 time_period=f"{start}-{end}",
                 include_causal_graph=include_chunk_graph,
             )
-            # System prompt for chunk summary structure
-            chunk_system = (
-                "You are a clinical documentation specialist. "
-                "You output period summaries in markdown format with exactly these headers: "
-                "# Subjective, # Objective, # Assessment, # Plan, # Summary. "
-                "Each section must start with its header on its own line."
-            )
+            # System prompt for chunk summary structure with detailed template
+            chunk_system = """You are a clinical documentation specialist. Output period summaries in markdown format with EXACTLY these sections:
+
+# Subjective
+Patient-reported symptoms and complaints during this time period.
+
+# Objective
+Clinical findings:
+- Vital signs and trends
+- Laboratory results (highlight abnormal values)
+- Procedures performed
+
+# Assessment
+Clinical reasoning:
+1. **Diagnoses** - Conditions identified or managed
+2. **Disease progression** - How conditions evolved
+3. **Risk factors** - New or ongoing concerns
+
+# Plan
+Treatment during this period:
+1. Medications started/changed
+2. Monitoring performed
+3. Referrals made
+
+# Summary
+2-3 sentences on key events and health trajectory during this period.
+
+Each section MUST start with its header on its own line. Do not skip sections."""
             chunk_start_time = time.perf_counter()
             summary = self._generate_text(
                 prompt,
@@ -4668,13 +4701,42 @@ Output one relationship per line. No other text."""
         if not skip_inline_graph:
             aggregate_prompt += self._get_admission_exclusion_instruction()
 
-        # System prompt to enforce SOAP note structure
-        soap_system = (
-            "You are a clinical documentation specialist. "
-            "You output SOAP notes in markdown format with exactly these headers: "
-            "# Patient Story, # Subjective, # Objective, # Assessment, # Plan, # Future Considerations, # Summary. "
-            "Each section must start with its header on its own line."
-        )
+        # System prompt to enforce SOAP note structure with detailed template
+        soap_system = """You are a clinical documentation specialist. Output SOAP notes in markdown format with EXACTLY these sections:
+
+# Patient Story
+1-2 paragraph narrative synthesizing the patient's health journey across all time periods.
+
+# Subjective
+Consolidated patient-reported symptoms and history across time periods.
+
+# Objective
+Synthesized clinical findings:
+- Most recent vital signs with trends over time
+- Key laboratory values and changes
+- Imaging findings if applicable
+
+# Assessment
+Integrated clinical reasoning with numbered subsections:
+1. **Active Problem List** - Current diagnoses by clinical priority
+2. **Disease Trajectories** - How conditions have progressed
+3. **Risk Stratification** - Risk factors and prognosis
+
+# Plan
+Treatment strategy with numbered items:
+1. Medications - current regimen and changes
+2. Monitoring - labs, imaging needed
+3. Lifestyle interventions
+4. Referrals
+5. Follow-up schedule
+
+# Future Considerations
+Conditions likely to progress, preventive interventions, screening needs.
+
+# Summary
+2-3 sentences on critical findings and priorities.
+
+Each section MUST start with its header on its own line. Do not skip sections."""
 
         aggregate_start = time.perf_counter()
         response = self._generate_text(
@@ -4715,10 +4777,32 @@ Output one relationship per line. No other text."""
             graph_prompt = self.CAUSAL_GRAPH_PROMPT.format(soap_note=response)
             # Add admission exclusion instruction if needed
             graph_prompt += self._get_admission_exclusion_instruction()
-            graph_system = (
-                "You output ONLY causal relationships in the format: Cause[type] ARROW Effect[type]. "
-                "One relationship per line. No explanations, no prose, no commentary."
-            )
+            graph_system = """You output ONLY causal relationships. No prose, no explanations, no commentary.
+
+FORMAT: Cause[type] ARROW Effect[type]
+
+TYPES: condition, medication, procedure, lifestyle, symptom, finding, genetic
+
+ARROWS:
+- ++> strongly increases risk
+- +> increases risk
+- --> strongly protects/reduces
+- -> protects/reduces
+- => directly causes
+
+INTERACTIONS:
+- A && B => C (both required together)
+- A || B => C (either sufficient)
+
+EXAMPLE OUTPUT:
+Obesity[lifestyle] ++> Type_2_Diabetes[condition]
+Type_2_Diabetes[condition] ++> Diabetic_Nephropathy[condition]
+Hypertension[condition] ++> Chronic_Kidney_Disease[condition]
+Metformin[medication] --> Blood_Glucose[finding]
+Smoking[lifestyle] && Hypertension[condition] ++> Stroke[condition]
+BRCA1_Mutation[genetic] || BRCA2_Mutation[genetic] || PALB2_Mutation[genetic] ++> Breast_Cancer[condition]
+
+Output one relationship per line. Nothing else."""
             graph_start = time.perf_counter()
             causal_graph_response = self._generate_text(
                 graph_prompt,
