@@ -100,6 +100,281 @@ SNOMED_SEMANTIC_TYPES = {
     "event": "Event",
 }
 
+# Common medical acronyms and their expansions
+# Used to expand acronyms before SNOMED matching
+MEDICAL_ACRONYMS = {
+    # Vital signs and measurements
+    "HR": "heart rate",
+    "BP": "blood pressure",
+    "SBP": "systolic blood pressure",
+    "DBP": "diastolic blood pressure",
+    "RR": "respiratory rate",
+    "SpO2": "oxygen saturation",
+    "O2 sat": "oxygen saturation",
+    "BMI": "body mass index",
+    "Temp": "temperature",
+    "Wt": "weight",
+    "Ht": "height",
+
+    # Lab values
+    "BUN": "blood urea nitrogen",
+    "Cr": "creatinine",
+    "eGFR": "estimated glomerular filtration rate",
+    "GFR": "glomerular filtration rate",
+    "HbA1c": "hemoglobin A1c",
+    "A1c": "hemoglobin A1c",
+    "LDL": "low density lipoprotein cholesterol",
+    "HDL": "high density lipoprotein cholesterol",
+    "TG": "triglycerides",
+    "TC": "total cholesterol",
+    "ALT": "alanine aminotransferase",
+    "AST": "aspartate aminotransferase",
+    "ALP": "alkaline phosphatase",
+    "GGT": "gamma-glutamyl transferase",
+    "WBC": "white blood cell count",
+    "RBC": "red blood cell count",
+    "Hgb": "hemoglobin",
+    "Hb": "hemoglobin",
+    "Hct": "hematocrit",
+    "PLT": "platelet count",
+    "INR": "international normalized ratio",
+    "PT": "prothrombin time",
+    "PTT": "partial thromboplastin time",
+    "aPTT": "activated partial thromboplastin time",
+    "BNP": "brain natriuretic peptide",
+    "NT-proBNP": "N-terminal pro-brain natriuretic peptide",
+    "CRP": "C-reactive protein",
+    "ESR": "erythrocyte sedimentation rate",
+    "TSH": "thyroid stimulating hormone",
+    "T3": "triiodothyronine",
+    "T4": "thyroxine",
+    "PSA": "prostate specific antigen",
+    "CEA": "carcinoembryonic antigen",
+    "AFP": "alpha fetoprotein",
+    "LFTs": "liver function tests",
+    "RFTs": "renal function tests",
+    "CBC": "complete blood count",
+    "BMP": "basic metabolic panel",
+    "CMP": "comprehensive metabolic panel",
+    "ABG": "arterial blood gas",
+    "VBG": "venous blood gas",
+    "UA": "urinalysis",
+    "U/A": "urinalysis",
+
+    # Conditions and diagnoses
+    "HTN": "hypertension",
+    "DM": "diabetes mellitus",
+    "T2DM": "type 2 diabetes mellitus",
+    "T1DM": "type 1 diabetes mellitus",
+    "DM2": "type 2 diabetes mellitus",
+    "DM1": "type 1 diabetes mellitus",
+    "CAD": "coronary artery disease",
+    "CHF": "congestive heart failure",
+    "HF": "heart failure",
+    "MI": "myocardial infarction",
+    "STEMI": "ST elevation myocardial infarction",
+    "NSTEMI": "non-ST elevation myocardial infarction",
+    "AFib": "atrial fibrillation",
+    "AF": "atrial fibrillation",
+    "A-fib": "atrial fibrillation",
+    "VFib": "ventricular fibrillation",
+    "VT": "ventricular tachycardia",
+    "SVT": "supraventricular tachycardia",
+    "PVD": "peripheral vascular disease",
+    "PAD": "peripheral arterial disease",
+    "DVT": "deep vein thrombosis",
+    "PE": "pulmonary embolism",
+    "CVA": "cerebrovascular accident",
+    "TIA": "transient ischemic attack",
+    "COPD": "chronic obstructive pulmonary disease",
+    "SOB": "shortness of breath",
+    "DOE": "dyspnea on exertion",
+    "CKD": "chronic kidney disease",
+    "AKI": "acute kidney injury",
+    "ESRD": "end stage renal disease",
+    "UTI": "urinary tract infection",
+    "URI": "upper respiratory infection",
+    "GERD": "gastroesophageal reflux disease",
+    "PUD": "peptic ulcer disease",
+    "IBD": "inflammatory bowel disease",
+    "IBS": "irritable bowel syndrome",
+    "NAFLD": "non-alcoholic fatty liver disease",
+    "OSA": "obstructive sleep apnea",
+    "OA": "osteoarthritis",
+    "RA": "rheumatoid arthritis",
+    "SLE": "systemic lupus erythematosus",
+    "MS": "multiple sclerosis",
+    "PD": "Parkinson's disease",
+    "AD": "Alzheimer's disease",
+    "ALS": "amyotrophic lateral sclerosis",
+    "BPH": "benign prostatic hyperplasia",
+    "PCOS": "polycystic ovary syndrome",
+    "PID": "pelvic inflammatory disease",
+    "STI": "sexually transmitted infection",
+    "STD": "sexually transmitted disease",
+    "HIV": "human immunodeficiency virus infection",
+    "AIDS": "acquired immunodeficiency syndrome",
+    "HCV": "hepatitis C virus infection",
+    "HBV": "hepatitis B virus infection",
+    "TB": "tuberculosis",
+    "MRSA": "methicillin-resistant Staphylococcus aureus infection",
+    "C. diff": "Clostridioides difficile infection",
+    "CDI": "Clostridioides difficile infection",
+
+    # Procedures and tests
+    "EKG": "electrocardiogram",
+    "ECG": "electrocardiogram",
+    "Echo": "echocardiogram",
+    "TTE": "transthoracic echocardiogram",
+    "TEE": "transesophageal echocardiogram",
+    "CT": "computed tomography",
+    "MRI": "magnetic resonance imaging",
+    "CXR": "chest X-ray",
+    "XR": "X-ray",
+    "US": "ultrasound",
+    "PET": "positron emission tomography",
+    "EEG": "electroencephalogram",
+    "EMG": "electromyography",
+    "EGD": "esophagogastroduodenoscopy",
+    "ERCP": "endoscopic retrograde cholangiopancreatography",
+    "CABG": "coronary artery bypass grafting",
+    "PCI": "percutaneous coronary intervention",
+    "PTCA": "percutaneous transluminal coronary angioplasty",
+    "ICD": "implantable cardioverter-defibrillator",
+    "PPM": "permanent pacemaker",
+    "AICD": "automatic implantable cardioverter-defibrillator",
+    "TKR": "total knee replacement",
+    "TKA": "total knee arthroplasty",
+    "THR": "total hip replacement",
+    "THA": "total hip arthroplasty",
+    "Lap chole": "laparoscopic cholecystectomy",
+    "Appy": "appendectomy",
+    "HD": "hemodialysis",
+    "PD": "peritoneal dialysis",
+    "TURP": "transurethral resection of prostate",
+
+    # Medications
+    "ASA": "aspirin",
+    "NSAID": "nonsteroidal anti-inflammatory drug",
+    "NSAIDs": "nonsteroidal anti-inflammatory drugs",
+    "PPI": "proton pump inhibitor",
+    "ACEi": "ACE inhibitor",
+    "ACEI": "ACE inhibitor",
+    "ARB": "angiotensin receptor blocker",
+    "BB": "beta blocker",
+    "CCB": "calcium channel blocker",
+    "SSRI": "selective serotonin reuptake inhibitor",
+    "SNRI": "serotonin-norepinephrine reuptake inhibitor",
+    "TCA": "tricyclic antidepressant",
+    "MAOI": "monoamine oxidase inhibitor",
+    "abx": "antibiotics",
+    "Abx": "antibiotics",
+    "OCP": "oral contraceptive pill",
+    "HRT": "hormone replacement therapy",
+    "TPN": "total parenteral nutrition",
+
+    # Clinical terms
+    "Hx": "history",
+    "PMH": "past medical history",
+    "PSH": "past surgical history",
+    "FH": "family history",
+    "SH": "social history",
+    "ROS": "review of systems",
+    "HPI": "history of present illness",
+    "CC": "chief complaint",
+    "Dx": "diagnosis",
+    "DDx": "differential diagnosis",
+    "Tx": "treatment",
+    "Rx": "prescription",
+    "Sx": "symptoms",
+    "Px": "prognosis",
+    "Bx": "biopsy",
+    "Fx": "fracture",
+    "Cx": "culture",
+    "WNL": "within normal limits",
+    "NAD": "no acute distress",
+    "A&O": "alert and oriented",
+    "AAOx3": "alert and oriented times three",
+    "PERRLA": "pupils equal round reactive to light and accommodation",
+    "RRR": "regular rate and rhythm",
+    "CTA": "clear to auscultation",
+    "CTAB": "clear to auscultation bilaterally",
+    "NT/ND": "non-tender non-distended",
+    "NKA": "no known allergies",
+    "NKDA": "no known drug allergies",
+    "PRN": "as needed",
+    "QD": "once daily",
+    "BID": "twice daily",
+    "TID": "three times daily",
+    "QID": "four times daily",
+    "HS": "at bedtime",
+    "AC": "before meals",
+    "PC": "after meals",
+    "PO": "by mouth",
+    "IV": "intravenous",
+    "IM": "intramuscular",
+    "SQ": "subcutaneous",
+    "SubQ": "subcutaneous",
+    "PR": "per rectum",
+    "SL": "sublingual",
+    "R/O": "rule out",
+    "S/P": "status post",
+    "w/": "with",
+    "w/o": "without",
+    "c/o": "complaining of",
+    "h/o": "history of",
+    "f/u": "follow up",
+    "y/o": "years old",
+    "yo": "years old",
+}
+
+
+def expand_medical_acronyms(text: str) -> str:
+    """
+    Expand common medical acronyms in text.
+
+    Args:
+        text: Input text potentially containing acronyms
+
+    Returns:
+        Text with acronyms expanded (original + expansion in parentheses)
+
+    Example:
+        >>> expand_medical_acronyms("HTN")
+        "HTN (hypertension)"
+        >>> expand_medical_acronyms("elevated BUN")
+        "elevated BUN (blood urea nitrogen)"
+    """
+    if not text:
+        return text
+
+    # Check if the entire text is an acronym
+    text_upper = text.strip().upper()
+    if text_upper in MEDICAL_ACRONYMS:
+        return MEDICAL_ACRONYMS[text_upper]
+
+    # Check case-sensitive matches (e.g., "HbA1c", "eGFR")
+    text_stripped = text.strip()
+    if text_stripped in MEDICAL_ACRONYMS:
+        return MEDICAL_ACRONYMS[text_stripped]
+
+    # If text contains multiple words, try to expand each
+    import re
+    words = re.split(r'(\s+)', text)
+    expanded_words = []
+
+    for word in words:
+        word_upper = word.upper()
+        if word_upper in MEDICAL_ACRONYMS:
+            expanded_words.append(MEDICAL_ACRONYMS[word_upper])
+        elif word in MEDICAL_ACRONYMS:  # Case-sensitive check
+            expanded_words.append(MEDICAL_ACRONYMS[word])
+        else:
+            expanded_words.append(word)
+
+    return "".join(expanded_words)
+
+
 # Cache directory
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "synthlab" / "snomed"
 
@@ -206,6 +481,7 @@ class SNOMEDLinker:
         concepts_path: Path to SNOMED concepts JSON. If None, will look in cache.
         device: Device to use ('auto', 'cuda', 'cpu')
         cache_dir: Directory for caching index and embeddings
+        use_flash_attention: Use Flash Attention 2 if available (faster on GPU)
         verbose: Print progress messages
     """
 
@@ -216,13 +492,16 @@ class SNOMEDLinker:
         concepts_path: Optional[Union[str, Path]] = None,
         device: str = "auto",
         cache_dir: Optional[Union[str, Path]] = None,
+        use_flash_attention: bool = True,
         verbose: bool = True,
     ):
         self._check_dependencies()
 
-        self.model_id = model_id
+        # Resolve model alias if provided (e.g., "qwen3-0.6b" -> "Qwen/Qwen3-Embedding-0.6B")
+        self.model_id = EMBEDDING_MODELS.get(model_id, model_id)
         self.device = self._resolve_device(device)
         self.cache_dir = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
+        self.use_flash_attention = use_flash_attention
         self.verbose = verbose
 
         # Lazy-loaded components
@@ -317,6 +596,27 @@ class SNOMEDLinker:
             safe_name = safe_name[:40] + "_" + hash_suffix
         return safe_name
 
+    def _check_flash_attention(self) -> bool:
+        """Check if Flash Attention 2 is available and model supports it."""
+        if self.device != "cuda":
+            return False
+
+        # BERT-based models don't support Flash Attention 2
+        # Only newer architectures (Qwen, LLaMA, Mistral, etc.) support it
+        bert_models = [
+            "sapbert", "pubmedbert", "biobert", "bert", "roberta",
+            "distilbert", "albert", "electra", "deberta"
+        ]
+        model_lower = self.model_id.lower()
+        if any(bert in model_lower for bert in bert_models):
+            return False
+
+        try:
+            import flash_attn
+            return True
+        except ImportError:
+            return False
+
     def _load_model(self):
         """Load the embedding model and tokenizer."""
         if self._model is not None or self._sentence_transformer is not None:
@@ -325,17 +625,30 @@ class SNOMEDLinker:
         if self.verbose:
             print(f"Loading embedding model: {self.model_id}")
 
+        # Check Flash Attention availability
+        flash_available = self._check_flash_attention() if self.use_flash_attention else False
+
         # Try sentence-transformers first for compatible models
         if self._is_sentence_transformer() or self._is_qwen_model():
             try:
                 from sentence_transformers import SentenceTransformer
+
+                # sentence-transformers can use Flash Attention if model supports it
+                model_kwargs = {"trust_remote_code": True}
+                if flash_available:
+                    model_kwargs["attn_implementation"] = "flash_attention_2"
+                    model_kwargs["torch_dtype"] = torch.float16
+
                 self._sentence_transformer = SentenceTransformer(
                     self.model_id,
                     device=self.device,
-                    trust_remote_code=True,  # Required for Qwen models
+                    trust_remote_code=True,
+                    model_kwargs=model_kwargs,
                 )
                 if self.verbose:
                     print(f"  Loaded via sentence-transformers")
+                    if flash_available:
+                        print(f"  Flash Attention 2: enabled")
                     print(f"  Device: {self.device}")
                 return
             except ImportError:
@@ -355,10 +668,28 @@ class SNOMEDLinker:
         if self._is_qwen_model():
             self._tokenizer.padding_side = 'left'
 
-        self._model = AutoModel.from_pretrained(
-            self.model_id,
-            trust_remote_code=True,
-        )
+        # Build model kwargs with optional Flash Attention
+        model_kwargs = {"trust_remote_code": True}
+        if flash_available:
+            model_kwargs["attn_implementation"] = "flash_attention_2"
+            model_kwargs["torch_dtype"] = torch.float16
+            if self.verbose:
+                print(f"  Flash Attention 2: enabled")
+
+        try:
+            self._model = AutoModel.from_pretrained(
+                self.model_id,
+                **model_kwargs,
+            )
+        except Exception as e:
+            # Fall back without Flash Attention if it fails
+            if flash_available and self.verbose:
+                print(f"  Flash Attention failed ({e}), using standard attention")
+            self._model = AutoModel.from_pretrained(
+                self.model_id,
+                trust_remote_code=True,
+            )
+
         self._model = self._model.to(self.device)
         self._model.eval()
 
@@ -366,7 +697,7 @@ class SNOMEDLinker:
             print(f"  Device: {self.device}")
 
     def _load_index(self):
-        """Load the FAISS index and concepts."""
+        """Load the FAISS index and concepts, rebuilding if dimension mismatch."""
         if self._index is not None:
             return
 
@@ -382,13 +713,10 @@ class SNOMEDLinker:
                 f"Build index first with: linker.build_index(snomed_concepts)"
             )
 
-        if self.verbose:
-            print(f"Loading SNOMED index from {self.index_path}")
-
         self._index = faiss.read_index(str(self.index_path))
 
         if self.verbose:
-            print(f"  Loaded {self._index.ntotal:,} concepts")
+            print(f"Loading SNOMED index: {self.index_path.name} ({self._index.ntotal:,} concepts)")
 
         # Load concepts
         with open(self.concepts_path, 'r') as f:
@@ -405,6 +733,20 @@ class SNOMEDLinker:
         ]
 
         self._concept_id_to_idx = {c.concept_id: i for i, c in enumerate(self._concepts)}
+
+        # Check dimension compatibility with the embedding model
+        self._load_model()
+        sample_emb = self.encode(["test"])
+        model_dim = sample_emb.shape[1]
+        index_dim = self._index.d
+
+        if model_dim != index_dim:
+            if self.verbose:
+                print(f"  Dimension mismatch: model={model_dim}, index={index_dim}")
+                print(f"  Rebuilding index with {self.model_id}...")
+
+            # Rebuild the index with the current model
+            self.build_index(self._concepts, save=True)
 
     def _is_qwen_model(self) -> bool:
         """Check if using a Qwen embedding model."""
@@ -503,6 +845,9 @@ class SNOMEDLinker:
         mention: str,
         k: int = 5,
         threshold: float = 0.0,
+        expand_acronyms: bool = True,
+        auto_expand: bool = False,
+        min_score_for_auto_expand: float = 0.5,
     ) -> list[SNOMEDMatch]:
         """
         Link a mention to SNOMED CT concepts.
@@ -511,14 +856,24 @@ class SNOMEDLinker:
             mention: Text mention to link
             k: Number of top matches to return
             threshold: Minimum similarity score threshold
+            expand_acronyms: Whether to expand medical acronyms before matching
+            auto_expand: Whether to try external lookup for low-confidence matches
+            min_score_for_auto_expand: Score threshold below which to try auto-expansion
 
         Returns:
             List of SNOMEDMatch objects sorted by score (descending)
         """
         self._load_index()
 
+        # Expand acronyms if enabled (e.g., "HR" -> "heart rate")
+        search_mention = mention
+        if expand_acronyms:
+            expanded = expand_medical_acronyms(mention)
+            if expanded != mention:
+                search_mention = expanded
+
         # Encode mention
-        embedding = self.encode(mention)
+        embedding = self.encode(search_mention)
 
         # Search index
         distances, indices = self._index.search(embedding.astype('float32'), k)
@@ -539,7 +894,64 @@ class SNOMEDLinker:
                 semantic_type=concept.semantic_type,
             ))
 
+        # Auto-expand: if best match is low confidence, try external lookup
+        if auto_expand and (not matches or matches[0].score < min_score_for_auto_expand):
+            new_concept = self._lookup_external(mention)
+            if new_concept:
+                # Add to index and re-search
+                self.add_concept(new_concept)
+                # Recursive call without auto_expand to get updated results
+                return self.link(mention, k=k, threshold=threshold,
+                               expand_acronyms=expand_acronyms, auto_expand=False)
+
         return matches
+
+    def add_concept(self, concept: SNOMEDConcept) -> bool:
+        """
+        Add a new concept to the index dynamically.
+
+        This allows the index to grow adaptively as new concepts are discovered.
+
+        Args:
+            concept: SNOMEDConcept to add
+
+        Returns:
+            True if added successfully, False if already exists
+        """
+        # Check if concept already exists
+        existing_ids = {c.concept_id for c in self._concepts}
+        if concept.concept_id in existing_ids:
+            return False
+
+        # Add to concepts list
+        self._concepts.append(concept)
+
+        # Compute embedding and add to index
+        embedding = self.encode(concept.term)
+        self._index.add(embedding.astype('float32'))
+
+        # Save updated index
+        self._save_index()
+
+        return True
+
+    def _lookup_external(self, mention: str) -> Optional[SNOMEDConcept]:
+        """
+        Look up a concept via the SNOMED International browser API.
+
+        No API key required - uses the public Snowstorm API.
+
+        Args:
+            mention: Text to look up
+
+        Returns:
+            SNOMEDConcept if found, None otherwise
+        """
+        # First try acronym expansion
+        expanded = expand_medical_acronyms(mention)
+        search_term = expanded if expanded != mention else mention
+
+        return lookup_snomed_concept(search_term, verbose=self.verbose)
 
     def link_batch(
         self,
@@ -547,6 +959,7 @@ class SNOMEDLinker:
         k: int = 5,
         threshold: float = 0.0,
         batch_size: int = 32,
+        expand_acronyms: bool = True,
     ) -> list[tuple[str, list[SNOMEDMatch]]]:
         """
         Link multiple mentions to SNOMED CT concepts.
@@ -556,14 +969,21 @@ class SNOMEDLinker:
             k: Number of top matches per mention
             threshold: Minimum similarity score threshold
             batch_size: Batch size for encoding
+            expand_acronyms: Whether to expand medical acronyms before matching
 
         Returns:
             List of (mention, matches) tuples
         """
         self._load_index()
 
+        # Expand acronyms if enabled
+        if expand_acronyms:
+            search_mentions = [expand_medical_acronyms(m) for m in mentions]
+        else:
+            search_mentions = mentions
+
         # Encode all mentions
-        embeddings = self.encode(mentions, batch_size=batch_size)
+        embeddings = self.encode(search_mentions, batch_size=batch_size)
 
         # Validate embedding dimensions match index
         index_dim = self._index.d
@@ -603,65 +1023,122 @@ class SNOMEDLinker:
     def build_index(
         self,
         concepts: list[SNOMEDConcept],
-        batch_size: int = 128,
+        batch_size: int = 512,
         save: bool = True,
+        use_fp16: bool = True,
     ) -> None:
         """
         Build FAISS index from SNOMED concepts.
 
         Args:
             concepts: List of SNOMEDConcept objects
-            batch_size: Batch size for encoding
+            batch_size: Batch size for encoding (larger = faster, more memory)
             save: Whether to save the index to disk
+            use_fp16: Use half precision for faster encoding (GPU only)
         """
+        import time
+        start_time = time.time()
+
         self._load_model()
 
+        n_concepts = len(concepts)
+        n_batches = (n_concepts + batch_size - 1) // batch_size
+
+        # Auto-tune batch size based on available GPU memory
+        if self.device == "cuda" and _torch_available:
+            try:
+                gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                # Heuristic: ~1GB per 2k concepts for SapBERT, less for larger models
+                suggested_batch = min(int(gpu_mem * 500), 1024)
+                if batch_size < suggested_batch and n_concepts > 10000:
+                    batch_size = suggested_batch
+                    n_batches = (n_concepts + batch_size - 1) // batch_size
+            except Exception:
+                pass
+
         if self.verbose:
-            print(f"Building SNOMED index from {len(concepts):,} concepts")
+            print(f"\n{'='*60}")
+            print(f"  Building SNOMED FAISS Index")
+            print(f"{'='*60}")
+            print(f"  Concepts: {n_concepts:,}")
+            print(f"  Model: {self.model_id}")
+            print(f"  Device: {self.device}")
+            print(f"  Batch size: {batch_size}")
+            if use_fp16 and self.device == "cuda":
+                print(f"  Precision: FP16 (faster)")
+            print(f"{'='*60}\n")
 
         # Extract terms
         terms = [c.term for c in concepts]
 
-        # Encode all terms
-        if self.verbose:
-            print(f"  Encoding terms with {self.model_id}...")
+        # Enable FP16 for faster encoding on GPU
+        use_amp = use_fp16 and self.device == "cuda" and _torch_available
+        if use_amp and self._model is not None:
+            self._model = self._model.half()
 
-        all_embeddings = []
+        # Pre-allocate embedding array for efficiency
+        # First encode a sample to get embedding dimension
+        sample_emb = self.encode(terms[:1], batch_size=1)
+        emb_dim = sample_emb.shape[1]
+        embeddings = np.zeros((n_concepts, emb_dim), dtype=np.float32)
 
-        iterator = range(0, len(terms), batch_size)
         if _tqdm_available and self.verbose:
-            iterator = _tqdm(iterator, desc="Encoding", unit="batch")
+            pbar = _tqdm(
+                total=n_concepts,
+                desc=f"Encoding {n_concepts:,} SNOMED concepts",
+                unit="concepts",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+                mininterval=0.5,
+            )
+        else:
+            pbar = None
 
-        for i in iterator:
+        # Process in batches, writing directly to pre-allocated array
+        for i in range(0, len(terms), batch_size):
             batch = terms[i:i + batch_size]
-            embeddings = self.encode(batch, batch_size=len(batch))
-            all_embeddings.append(embeddings)
+            batch_embeddings = self.encode(batch, batch_size=len(batch))
 
-        embeddings = np.vstack(all_embeddings).astype('float32')
+            # Write directly to pre-allocated array
+            end_idx = min(i + batch_size, n_concepts)
+            embeddings[i:end_idx] = batch_embeddings
 
+            if pbar:
+                pbar.update(len(batch))
+
+            # Clear GPU cache periodically to prevent OOM
+            if self.device == "cuda" and i > 0 and i % (batch_size * 10) == 0:
+                if _torch_available:
+                    torch.cuda.empty_cache()
+
+        if pbar:
+            pbar.close()
+
+        # Restore model to FP32 if we converted
+        if use_amp and self._model is not None:
+            self._model = self._model.float()
+
+        encode_time = time.time() - start_time
+
+        # Build FAISS index
         if self.verbose:
-            print(f"  Embeddings shape: {embeddings.shape}")
+            print(f"\nBuilding FAISS index ({emb_dim}-dim vectors)...")
 
-        # Build FAISS index (Inner Product for normalized vectors = cosine similarity)
-        if self.verbose:
-            print("  Building FAISS index...")
-
-        self._index = faiss.IndexFlatIP(embeddings.shape[1])
+        faiss_start = time.time()
+        self._index = faiss.IndexFlatIP(emb_dim)
         self._index.add(embeddings)
+        faiss_time = time.time() - faiss_start
 
         self._concepts = concepts
         self._concept_id_to_idx = {c.concept_id: i for i, c in enumerate(concepts)}
-
-        if self.verbose:
-            print(f"  Index contains {self._index.ntotal:,} vectors")
 
         # Save
         if save:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
             if self.verbose:
-                print(f"  Saving index to {self.index_path}")
+                print(f"Saving index to {self.index_path}...")
 
+            save_start = time.time()
             faiss.write_index(self._index, str(self.index_path))
 
             # Save concepts
@@ -677,9 +1154,27 @@ class SNOMEDLinker:
 
             with open(self.concepts_path, 'w') as f:
                 json.dump(concepts_data, f)
+            save_time = time.time() - save_start
 
-            if self.verbose:
-                print(f"  Saved concepts to {self.concepts_path}")
+        elapsed = time.time() - start_time
+        index_size_mb = self.index_path.stat().st_size / (1024 * 1024) if save and self.index_path.exists() else 0
+        rate = n_concepts / encode_time if encode_time > 0 else 0
+
+        if self.verbose:
+            print(f"\n{'='*60}")
+            print(f"  SNOMED Index Built Successfully!")
+            print(f"{'='*60}")
+            print(f"  Vectors: {self._index.ntotal:,}")
+            print(f"  Dimensions: {emb_dim}")
+            if save:
+                print(f"  Index size: {index_size_mb:.1f} MB")
+                print(f"  Saved to: {self.index_path}")
+            print(f"  Encoding: {encode_time:.1f}s ({rate:,.0f} concepts/sec)")
+            print(f"  FAISS build: {faiss_time:.1f}s")
+            if save:
+                print(f"  Save: {save_time:.1f}s")
+            print(f"  Total: {elapsed:.1f}s ({elapsed/60:.1f} min)")
+            print(f"{'='*60}\n")
 
     def get_concept(self, concept_id: str) -> Optional[SNOMEDConcept]:
         """Get a concept by its SNOMED CT ID."""
@@ -948,6 +1443,8 @@ class SNOMEDLinker:
         threshold: float = 0.0,
         batch_size: int = 32,
         track_gaps: bool = True,
+        expand_acronyms: bool = True,
+        auto_expand: bool = False,
     ) -> list[tuple[str, list[SNOMEDMatch]]]:
         """Link multiple mentions using the embedding cache.
 
@@ -960,18 +1457,33 @@ class SNOMEDLinker:
             threshold: Minimum similarity score threshold
             batch_size: Batch size for encoding new mentions
             track_gaps: Whether to track unmatched/low-confidence terms
+            expand_acronyms: Whether to expand medical acronyms before matching
+            auto_expand: Whether to look up missing concepts from SNOMED browser
 
         Returns:
             List of (mention, matches) tuples
         """
         self._load_index()
 
+        # Expand acronyms if enabled (e.g., "HR" -> "heart rate")
+        original_to_expanded = {}
+        if expand_acronyms:
+            expanded_mentions = []
+            for mention in mentions:
+                expanded = expand_medical_acronyms(mention)
+                original_to_expanded[mention] = expanded
+                expanded_mentions.append(expanded)
+            search_mentions = expanded_mentions
+        else:
+            search_mentions = mentions
+            original_to_expanded = {m: m for m in mentions}
+
         # Separate cached and uncached mentions
         cached_mentions = []
         uncached_mentions = []
         mention_order = {}  # Track original order
 
-        for i, mention in enumerate(mentions):
+        for i, mention in enumerate(search_mentions):
             mention_order[mention] = i
             if self._cache_enabled and mention in self._mention_cache:
                 cached_mentions.append(mention)
@@ -987,12 +1499,12 @@ class SNOMEDLinker:
 
         # Build full embedding matrix in original order
         embeddings = []
-        for mention in mentions:
-            if mention in self._mention_cache:
-                embeddings.append(self._mention_cache[mention])
+        for search_mention in search_mentions:
+            if search_mention in self._mention_cache:
+                embeddings.append(self._mention_cache[search_mention])
             else:
                 # Should not happen, but fallback
-                embeddings.append(self.encode(mention))
+                embeddings.append(self.encode(search_mention))
 
         embeddings = np.vstack(embeddings)
 
@@ -1009,9 +1521,11 @@ class SNOMEDLinker:
         # Search index
         distances, indices = self._index.search(embeddings.astype('float32'), k)
 
-        # Build results
+        # Build results - use original mentions as keys
         results = []
-        for mention, idxs, scores in zip(mentions, indices, distances):
+        needs_auto_expand = []  # Collect low-confidence matches for auto-expand
+
+        for original_mention, search_mention, idxs, scores in zip(mentions, search_mentions, indices, distances):
             matches = []
             for idx, score in zip(idxs, scores):
                 if idx < 0 or idx >= len(self._concepts):
@@ -1027,14 +1541,48 @@ class SNOMEDLinker:
                     semantic_type=concept.semantic_type,
                 ))
 
-            # Track gaps
+            # Track gaps and collect for auto-expand
             if track_gaps:
                 if not matches:
-                    self._unmatched_terms[mention] = self._unmatched_terms.get(mention, 0) + 1
+                    self._unmatched_terms[original_mention] = self._unmatched_terms.get(original_mention, 0) + 1
+                    if auto_expand:
+                        needs_auto_expand.append((original_mention, search_mention))
                 elif matches[0].score < 0.5:
-                    self._low_confidence_terms[mention] = (matches[0].score, matches[0].term)
+                    self._low_confidence_terms[original_mention] = (matches[0].score, matches[0].term)
+                    if auto_expand:
+                        needs_auto_expand.append((original_mention, search_mention))
 
-            results.append((mention, matches))
+            results.append((original_mention, matches))
+
+        # Auto-expand: look up missing concepts from SNOMED browser
+        if auto_expand and needs_auto_expand:
+            expanded_concepts = []
+            for original, search_term in needs_auto_expand:
+                concept = self._lookup_external(search_term)
+                if concept:
+                    expanded_concepts.append(concept)
+                    if self.verbose:
+                        print(f"    Auto-expanded: '{original}' -> {concept.term} ({concept.concept_id})")
+
+            # Add new concepts to index and re-link those mentions
+            if expanded_concepts:
+                for concept in expanded_concepts:
+                    self.add_concept(concept)
+
+                # Re-link the expanded mentions
+                expanded_originals = [m[0] for m in needs_auto_expand]
+                relinked = self.link_batch_with_cache(
+                    expanded_originals, k=k, threshold=threshold,
+                    batch_size=batch_size, track_gaps=False,
+                    expand_acronyms=expand_acronyms, auto_expand=False,  # Don't recurse
+                )
+
+                # Update results with relinked matches
+                relinked_dict = dict(relinked)
+                results = [
+                    (m, relinked_dict.get(m, matches) if m in relinked_dict else matches)
+                    for m, matches in results
+                ]
 
         return results
 
@@ -1166,6 +1714,131 @@ def load_snomed_from_csv(
     return concepts
 
 
+def load_snomed_from_omop(
+    omop_path: Union[str, Path],
+    vocabulary_id: str = "SNOMED",
+    standard_only: bool = True,
+    active_only: bool = True,
+    domains: Optional[list[str]] = None,
+    max_concepts: Optional[int] = None,
+    verbose: bool = True,
+) -> list[SNOMEDConcept]:
+    """
+    Load SNOMED CT concepts from an OMOP CDM CONCEPT.csv file.
+
+    The OMOP Common Data Model stores concepts in a standardized format.
+    This function reads the CONCEPT.csv file and filters for SNOMED concepts.
+
+    OMOP CONCEPT.csv columns:
+        - concept_id: Unique identifier
+        - concept_name: Readable name
+        - domain_id: Domain (Condition, Drug, Procedure, etc.)
+        - vocabulary_id: Source vocabulary (SNOMED, ICD10, RxNorm, etc.)
+        - concept_class_id: Class within vocabulary
+        - standard_concept: 'S' for standard, 'C' for classification, empty for non-standard
+        - concept_code: Code in source vocabulary (SNOMED CT ID)
+        - valid_start_date: Start of validity period
+        - valid_end_date: End of validity period
+        - invalid_reason: 'D' for deleted, 'U' for upgraded, empty for active
+
+    Args:
+        omop_path: Path to CONCEPT.csv file (tab or comma delimited)
+        vocabulary_id: Vocabulary to filter for (default: "SNOMED")
+        standard_only: Only include standard concepts (standard_concept='S')
+        active_only: Only include active concepts (invalid_reason is empty)
+        domains: List of domains to include (None = all, e.g., ["Condition", "Procedure"])
+        max_concepts: Maximum number of concepts to load (None = all)
+        verbose: Print progress messages
+
+    Returns:
+        List of SNOMEDConcept objects
+
+    Example:
+        >>> concepts = load_snomed_from_omop("/path/to/CONCEPT.csv")
+        >>> print(f"Loaded {len(concepts):,} SNOMED concepts")
+        Loaded 350,000 SNOMED concepts
+
+        >>> # Load only conditions
+        >>> conditions = load_snomed_from_omop(
+        ...     "/path/to/CONCEPT.csv",
+        ...     domains=["Condition"]
+        ... )
+    """
+    import pandas as pd
+
+    omop_path = Path(omop_path)
+
+    if not omop_path.exists():
+        raise FileNotFoundError(f"CONCEPT.csv not found at {omop_path}")
+
+    if verbose:
+        print(f"Loading SNOMED concepts from OMOP file: {omop_path}")
+
+    # Try to detect delimiter (tab vs comma)
+    with open(omop_path, 'r', encoding='utf-8') as f:
+        first_line = f.readline()
+        delimiter = '\t' if '\t' in first_line else ','
+
+    # Load the file
+    df = pd.read_csv(omop_path, sep=delimiter, low_memory=False)
+
+    if verbose:
+        print(f"  Total concepts in file: {len(df):,}")
+
+    # Filter for vocabulary
+    if vocabulary_id:
+        df = df[df['vocabulary_id'] == vocabulary_id]
+        if verbose:
+            print(f"  After vocabulary filter ({vocabulary_id}): {len(df):,}")
+
+    # Filter for standard concepts
+    if standard_only:
+        df = df[df['standard_concept'] == 'S']
+        if verbose:
+            print(f"  After standard_concept='S' filter: {len(df):,}")
+
+    # Filter for active concepts (invalid_reason should be empty/NaN)
+    if active_only:
+        df = df[df['invalid_reason'].isna() | (df['invalid_reason'] == '')]
+        if verbose:
+            print(f"  After active filter (no invalid_reason): {len(df):,}")
+
+    # Filter for specific domains
+    if domains:
+        df = df[df['domain_id'].isin(domains)]
+        if verbose:
+            print(f"  After domain filter ({domains}): {len(df):,}")
+
+    # Limit number of concepts
+    if max_concepts:
+        df = df.head(max_concepts)
+        if verbose:
+            print(f"  After max_concepts limit: {len(df):,}")
+
+    # Build concept list
+    concepts = []
+    for _, row in df.iterrows():
+        # Use concept_code (SNOMED CT ID) as the concept_id, not the OMOP concept_id
+        concept = SNOMEDConcept(
+            concept_id=str(row['concept_code']),  # SNOMED CT ID
+            term=str(row['concept_name']),
+            semantic_type=str(row.get('concept_class_id', '')),
+        )
+        concepts.append(concept)
+
+    if verbose:
+        print(f"  Loaded {len(concepts):,} SNOMED concepts")
+
+        # Show domain distribution
+        if len(df) > 0:
+            domain_counts = df['domain_id'].value_counts()
+            print("  Domain distribution:")
+            for domain, count in domain_counts.head(10).items():
+                print(f"    {domain}: {count:,}")
+
+    return concepts
+
+
 def download_snomed_subset(
     subset: str = "core",
     cache_dir: Optional[Union[str, Path]] = None,
@@ -1192,16 +1865,219 @@ def download_snomed_subset(
         These subsets are derived from UMLS and require accepting
         the UMLS license terms. Data is for research use only.
     """
-    # TODO: Host pre-built subsets and implement download
-    # For now, raise an informative error
-    raise NotImplementedError(
-        f"Pre-built SNOMED subsets are not yet available.\n"
-        f"Please build the index manually using one of:\n"
-        f"  1. load_snomed_from_umls(umls_path) - requires UMLS license\n"
-        f"  2. load_snomed_from_csv(csv_path) - from your own CSV\n"
-        f"  3. get_sample_snomed_concepts() - small demo set (~500 concepts)\n"
-        f"  4. Use MedCAT models which include SNOMED: pip install medcat\n"
-    )
+    # TODO: Host pre-built subsets - for now use SNOMED browser API
+    if verbose:
+        print(f"Downloading SNOMED concepts via Snowstorm browser API...")
+        print(f"Subset: {subset}")
+
+    concepts = fetch_snomed_from_browser(subset=subset, verbose=verbose)
+
+    if not concepts:
+        raise RuntimeError(
+            f"Could not download SNOMED subset '{subset}'. Try:\n"
+            f"  1. load_snomed_from_umls(umls_path) - requires UMLS license\n"
+            f"  2. load_snomed_from_csv(csv_path) - from your own CSV\n"
+            f"  3. get_sample_snomed_concepts() - small demo set\n"
+        )
+
+    # Cache the downloaded concepts
+    if cache_dir:
+        cache_path = Path(cache_dir) / f"snomed_{subset}.json"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, 'w') as f:
+            json.dump([
+                {"concept_id": c.concept_id, "term": c.term, "semantic_type": c.semantic_type}
+                for c in concepts
+            ], f)
+        if verbose:
+            print(f"Cached {len(concepts)} concepts to {cache_path}")
+
+    return concepts
+
+
+def fetch_snomed_from_browser(
+    subset: str = "core",
+    verbose: bool = True,
+) -> list[SNOMEDConcept]:
+    """
+    Fetch SNOMED CT concepts from the SNOMED International browser API.
+
+    Uses the public Snowstorm API at browser.ihtsdotools.org.
+    No authentication required.
+
+    Args:
+        subset: Which subset to fetch:
+            - "core": Common clinical findings and disorders
+            - "findings": Clinical findings hierarchy
+            - "procedures": Procedure hierarchy
+        verbose: Print progress
+
+    Returns:
+        List of SNOMEDConcept objects
+    """
+    import urllib.request
+    import urllib.parse
+
+    base_url = "https://browser.ihtsdotools.org/snowstorm/snomed-ct"
+    branch = "MAIN/2024-03-01"  # Use stable release
+
+    # Define ECL queries for different subsets
+    ecl_queries = {
+        "core": "< 404684003 OR < 71388002 OR < 123037004",  # Clinical finding OR Procedure OR Body structure
+        "findings": "< 404684003",  # Descendant of Clinical finding
+        "procedures": "< 71388002",  # Descendant of Procedure
+        "substances": "< 105590001",  # Descendant of Substance
+    }
+
+    ecl = ecl_queries.get(subset, ecl_queries["core"])
+
+    concepts = []
+    offset = 0
+    limit = 1000  # API limit
+    total = None
+
+    if verbose:
+        print(f"Fetching SNOMED concepts (this may take a few minutes)...")
+
+    while True:
+        try:
+            params = urllib.parse.urlencode({
+                "ecl": ecl,
+                "offset": offset,
+                "limit": limit,
+                "active": "true",
+            })
+            url = f"{base_url}/browser/{branch}/concepts?{params}"
+
+            req = urllib.request.Request(url)
+            req.add_header("Accept", "application/json")
+            req.add_header("Accept-Language", "en")
+
+            with urllib.request.urlopen(req, timeout=60) as response:
+                data = json.loads(response.read().decode())
+
+            if total is None:
+                total = data.get("total", 0)
+                if verbose:
+                    print(f"  Total concepts available: {total:,}")
+
+            items = data.get("items", [])
+            if not items:
+                break
+
+            for item in items:
+                concept_id = item.get("conceptId", "")
+                fsn = item.get("fsn", {}).get("term", "")
+                pt = item.get("pt", {}).get("term", fsn)
+
+                # Determine semantic type from FSN
+                sem_type = "finding"
+                if "(procedure)" in fsn.lower():
+                    sem_type = "procedure"
+                elif "(body structure)" in fsn.lower():
+                    sem_type = "body_structure"
+                elif "(substance)" in fsn.lower():
+                    sem_type = "substance"
+                elif "(disorder)" in fsn.lower():
+                    sem_type = "disorder"
+                elif "(finding)" in fsn.lower():
+                    sem_type = "finding"
+
+                concepts.append(SNOMEDConcept(
+                    concept_id=concept_id,
+                    term=pt,  # Use preferred term
+                    semantic_type=sem_type,
+                ))
+
+            offset += limit
+            if verbose and offset % 5000 == 0:
+                print(f"  Downloaded {len(concepts):,} / {total:,} concepts...")
+
+            # Limit to reasonable number for demo
+            if len(concepts) >= 50000:
+                if verbose:
+                    print(f"  Limiting to 50,000 concepts for performance")
+                break
+
+        except Exception as e:
+            if verbose:
+                print(f"  API error at offset {offset}: {e}")
+            break
+
+    if verbose:
+        print(f"  Downloaded {len(concepts):,} SNOMED concepts")
+
+    return concepts
+
+
+def lookup_snomed_concept(
+    term: str,
+    verbose: bool = False,
+) -> Optional[SNOMEDConcept]:
+    """
+    Look up a single concept from the SNOMED browser API.
+
+    This is useful for on-demand expansion when a term isn't in the index.
+
+    Args:
+        term: Term to look up
+        verbose: Print debug info
+
+    Returns:
+        SNOMEDConcept if found, None otherwise
+    """
+    import urllib.request
+    import urllib.parse
+
+    try:
+        base_url = "https://browser.ihtsdotools.org/snowstorm/snomed-ct"
+        branch = "MAIN/2024-03-01"
+
+        params = urllib.parse.urlencode({
+            "term": term,
+            "active": "true",
+            "limit": 1,
+        })
+        url = f"{base_url}/browser/{branch}/descriptions?{params}"
+
+        req = urllib.request.Request(url)
+        req.add_header("Accept", "application/json")
+        req.add_header("Accept-Language", "en")
+
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+
+        items = data.get("items", [])
+        if items:
+            item = items[0]
+            concept = item.get("concept", {})
+            concept_id = concept.get("conceptId", "")
+            fsn = concept.get("fsn", {}).get("term", "")
+            pt = concept.get("pt", {}).get("term", item.get("term", term))
+
+            # Determine semantic type
+            sem_type = "finding"
+            if "(procedure)" in fsn.lower():
+                sem_type = "procedure"
+            elif "(body structure)" in fsn.lower():
+                sem_type = "body_structure"
+            elif "(substance)" in fsn.lower():
+                sem_type = "substance"
+
+            if verbose:
+                print(f"  Found: {pt} ({concept_id})")
+
+            return SNOMEDConcept(
+                concept_id=concept_id,
+                term=pt,
+                semantic_type=sem_type,
+            )
+
+    except Exception as e:
+        if verbose:
+            print(f"  Lookup failed for '{term}': {e}")
+
+    return None
 
 
 def get_sample_snomed_concepts() -> list[SNOMEDConcept]:
@@ -1263,6 +2139,40 @@ def get_sample_snomed_concepts() -> list[SNOMEDConcept]:
         ("254637007", "Lung cancer", "finding"),
         ("40122008", "Pneumothorax", "finding"),
         ("70995007", "Pulmonary embolism", "finding"),
+        ("267036007", "Dyspnea", "finding"),
+        ("11833005", "Shortness of breath", "finding"),
+        ("49727002", "Cough", "finding"),
+        ("28743005", "Productive cough", "finding"),
+        ("275498002", "Acute respiratory distress syndrome", "finding"),
+        ("78275009", "Obstructive sleep apnea", "finding"),
+        ("73430006", "Sleep apnea", "finding"),
+        ("50043002", "Upper respiratory infection", "finding"),
+        ("36971009", "Sinusitis", "finding"),
+        ("40055000", "Chronic sinusitis", "finding"),
+        ("15805002", "Acute sinusitis", "finding"),
+        ("82272006", "Common cold", "finding"),
+        ("195662009", "Acute bronchitis", "finding"),
+        ("63480004", "Chronic bronchitis", "finding"),
+        ("233678006", "Allergic rhinitis", "finding"),
+        ("61582004", "Allergic rhinitis", "finding"),
+
+        # ENT conditions
+        ("194377003", "Otitis media", "finding"),
+        ("65363002", "Otitis media", "finding"),
+        ("3110003", "Acute otitis media", "finding"),
+        ("21186006", "Chronic otitis media", "finding"),
+        ("39498005", "Tonsillitis", "finding"),
+        ("405737000", "Pharyngitis", "finding"),
+        ("43878008", "Streptococcal pharyngitis", "finding"),
+        ("126485001", "Laryngitis", "finding"),
+        ("19471005", "Epistaxis", "finding"),
+        ("162298006", "Nasal congestion", "finding"),
+        ("64531003", "Nasal discharge", "finding"),
+        ("60862001", "Tinnitus", "finding"),
+        ("15188001", "Hearing loss", "finding"),
+        ("44054006", "Sensorineural hearing loss", "finding"),
+        ("95820000", "Conductive hearing loss", "finding"),
+        ("422587007", "Vertigo", "finding"),
 
         # Neurological conditions
         ("386806002", "Impaired cognition", "finding"),
@@ -1424,6 +2334,97 @@ def get_sample_snomed_concepts() -> list[SNOMEDConcept]:
         ("165581004", "Elevated CRP", "finding"),
         ("165468009", "Elevated BNP", "finding"),
         ("165507003", "Elevated troponin", "finding"),
+        ("166740000", "Elevated serum creatinine", "finding"),
+        ("166923009", "Blood urea nitrogen elevated", "finding"),
+        ("365764009", "Finding of heart rate", "finding"),
+        ("364075005", "Heart rate", "observable"),
+        ("271649006", "Systolic blood pressure", "observable"),
+        ("271650006", "Diastolic blood pressure", "observable"),
+        ("75367002", "Blood pressure", "observable"),
+        ("86290005", "Respiratory rate", "observable"),
+        ("103228002", "Hemoglobin saturation with oxygen", "observable"),
+        ("363812007", "Head circumference", "observable"),
+        ("27113001", "Body weight", "observable"),
+        ("50373000", "Body height", "observable"),
+        ("60621009", "Body mass index", "observable"),
+        ("386725007", "Body temperature", "observable"),
+        ("42419004", "Hemoglobin A1c measurement", "procedure"),
+        ("271062006", "Fasting blood glucose", "observable"),
+        ("33747003", "Glomerular filtration rate", "observable"),
+
+        # Common clinical observations
+        ("102594003", "Electrocardiogram finding", "finding"),
+        ("164847006", "Electrocardiogram normal", "finding"),
+        ("164861001", "ECG: atrial fibrillation", "finding"),
+        ("164884008", "ECG: ST elevation", "finding"),
+        ("164889003", "ECG: T wave inversion", "finding"),
+        ("713197008", "Reduced left ventricular ejection fraction", "finding"),
+        ("8867004", "Left ventricular hypertrophy", "finding"),
+        ("399340007", "Stress test abnormal", "finding"),
+        ("252569009", "Chest X-ray finding", "finding"),
+        ("373945007", "Pericardial effusion", "finding"),
+        ("38528000", "Pleural effusion", "finding"),
+        ("840544004", "Pulmonary infiltrate", "finding"),
+        ("129165009", "Edema", "finding"),
+        ("267038008", "Peripheral edema", "finding"),
+        ("271863002", "Ankle edema", "finding"),
+        ("248499001", "Edema of lower extremity", "finding"),
+        ("248490000", "Ascites", "finding"),
+        ("271943001", "Jaundice", "finding"),
+        ("267034002", "Pallor", "finding"),
+        ("271807003", "Fever", "finding"),
+        ("386661006", "Chills", "finding"),
+        ("25064002", "Headache", "finding"),
+        ("21522001", "Abdominal pain", "finding"),
+        ("29857009", "Chest pain", "finding"),
+        ("161891005", "Back pain", "finding"),
+        ("57676002", "Joint pain", "finding"),
+        ("68962001", "Muscle pain", "finding"),
+        ("271757001", "Fatigue", "finding"),
+        ("84229001", "Fatigue", "finding"),
+        ("367391008", "Malaise", "finding"),
+        ("422400008", "Vomiting", "finding"),
+        ("422587007", "Nausea", "finding"),
+        ("62315008", "Diarrhea", "finding"),
+        ("14760008", "Constipation", "finding"),
+        ("267102003", "Dysphagia", "finding"),
+        ("300359004", "Finding of appetite", "finding"),
+        ("79890006", "Loss of appetite", "finding"),
+        ("161832001", "Weight loss", "finding"),
+        ("8943002", "Weight gain", "finding"),
+        ("22253000", "Pain", "finding"),
+        ("373930000", "Cognitive deficit", "finding"),
+        ("386807006", "Memory impairment", "finding"),
+        ("40917007", "Confusion", "finding"),
+        ("3006004", "Altered mental status", "finding"),
+        ("419723007", "Mentally alert", "finding"),
+        ("271587009", "Depressed mood", "finding"),
+        ("48694002", "Anxiety", "finding"),
+        ("26079004", "Panic attack", "finding"),
+        ("28442001", "Suicidal ideation", "finding"),
+        ("247592009", "Poor sleep", "finding"),
+        ("193462001", "Insomnia", "finding"),
+
+        # Common clinical terms
+        ("248153007", "Family history of disease", "finding"),
+        ("160303001", "Family history of diabetes mellitus", "finding"),
+        ("134439009", "Family history of heart disease", "finding"),
+        ("312824007", "Family history of cancer", "finding"),
+        ("160357008", "Family history of hypertension", "finding"),
+        ("429280009", "Medication adherence", "finding"),
+        ("129832003", "Non-compliance with medication regimen", "finding"),
+        ("276026009", "Mechanical fall", "finding"),
+        ("161898004", "Falls", "finding"),
+        ("20602000", "Indwelling urinary catheter", "finding"),
+        ("373573001", "Nosocomial infection", "finding"),
+        ("233678006", "Seasonal allergic rhinitis", "finding"),
+        ("91936005", "Allergy", "finding"),
+        ("416098002", "Drug allergy", "finding"),
+        ("91935009", "Food allergy", "finding"),
+        ("300916003", "Latex allergy", "finding"),
+        ("91930004", "Penicillin allergy", "finding"),
+        ("294505008", "Sulfonamide allergy", "finding"),
+        ("417532006", "Adverse drug reaction", "finding"),
     ]
 
     return [
@@ -1464,6 +2465,274 @@ def setup_sample_linker(verbose: bool = True) -> SNOMEDLinker:
         linker.build_index(concepts)
 
     return linker
+
+
+def build_snomed_index(
+    omop_path: Optional[Union[str, Path]] = None,
+    concepts: Optional[list[SNOMEDConcept]] = None,
+    model_id: str = SAPBERT_MODEL_ID,
+    index_name: str = "snomed_full",
+    domains: Optional[list[str]] = None,
+    batch_size: int = 512,
+    use_fp16: bool = True,
+    use_flash_attention: bool = True,
+    verbose: bool = True,
+) -> Path:
+    """
+    Build and cache a SNOMED index from OMOP data (one-time operation).
+
+    This is an OFFLINE operation that should be run once to pre-compute
+    embeddings for all SNOMED concepts. The resulting index is cached
+    and can be loaded instantly for runtime queries.
+
+    Args:
+        omop_path: Path to OMOP CONCEPT.csv file
+        concepts: Pre-loaded list of SNOMEDConcept (alternative to omop_path)
+        model_id: Embedding model to use
+        index_name: Base name for the cached index (default: "snomed_full").
+            The concept count is automatically appended, e.g., "snomed_full_349k".
+        domains: Filter to specific domains (e.g., ["Condition", "Procedure"])
+        batch_size: Batch size for embedding (larger = faster, more memory)
+        use_fp16: Use half precision for faster GPU encoding
+        use_flash_attention: Use Flash Attention 2 if available (faster on GPU)
+        verbose: Print progress messages
+
+    Returns:
+        Path to the cached index file
+
+    Example:
+        # One-time setup (run once, takes 10-30 minutes for full SNOMED)
+        >>> index_path = build_snomed_index("/path/to/CONCEPT.csv")
+        Building SNOMED index from 349,211 concepts...
+        To load this index, use:
+          linker = sl.load_snomed_linker('snomed_full_349211')
+
+        # Runtime (instant loading)
+        >>> linker = load_snomed_linker('snomed_full_349211')
+        >>> matches = linker.link("diabetes")
+    """
+    # Resolve model alias if provided
+    model_id = EMBEDDING_MODELS.get(model_id, model_id)
+
+    if omop_path is None and concepts is None:
+        raise ValueError("Must provide either omop_path or concepts")
+
+    if concepts is None:
+        if verbose:
+            print(f"Loading SNOMED concepts from {omop_path}...")
+        concepts = load_snomed_from_omop(
+            omop_path,
+            domains=domains,
+            verbose=verbose,
+        )
+
+    # Include exact concept count in index name for clarity
+    n_concepts = len(concepts)
+    full_index_name = f"{index_name}_{n_concepts}"
+
+    # Create linker with custom index path
+    cache_dir = DEFAULT_CACHE_DIR
+    model_suffix = SNOMEDLinker._get_model_cache_suffix(model_id)
+    index_path = cache_dir / f"{full_index_name}_{model_suffix}.index"
+    concepts_path = cache_dir / f"{full_index_name}_{model_suffix}_concepts.json"
+
+    linker = SNOMEDLinker(
+        model_id=model_id,
+        index_path=index_path,
+        concepts_path=concepts_path,
+        use_flash_attention=use_flash_attention,
+        verbose=verbose,
+    )
+
+    linker.build_index(concepts, batch_size=batch_size, use_fp16=use_fp16)
+
+    if verbose:
+        print(f"\nTo load this index, use:")
+        print(f"  linker = sl.load_snomed_linker('{full_index_name}')")
+
+    return index_path
+
+
+def load_snomed_linker(
+    index_name: str = "snomed_full",
+    model_id: str = SAPBERT_MODEL_ID,
+    verbose: bool = True,
+    auto_download: bool = True,
+    force: bool = False,
+) -> SNOMEDLinker:
+    """
+    Load a pre-built SNOMED index for fast runtime queries.
+
+    This loads a cached index that was previously built with build_snomed_index().
+    Loading is fast (seconds) compared to building (minutes).
+
+    If no index exists and auto_download is True (default), the SNOMED vocabulary
+    will be automatically downloaded from GitHub releases and the index built.
+
+    Args:
+        index_name: Name of the cached index (default: "snomed_full")
+        model_id: Embedding model (must match what was used to build)
+        verbose: Print progress messages
+        auto_download: If True, automatically download vocabulary and build index
+            if not found (default: True)
+        force: If True, delete existing index and rebuild from scratch (default: False)
+
+    Returns:
+        SNOMEDLinker ready for queries
+
+    Raises:
+        FileNotFoundError: If the index hasn't been built and auto_download is False
+
+    Example:
+        >>> linker = load_snomed_linker()
+        >>> matches = linker.link("chronic sinusitis")
+        >>> print(matches[0])
+        SCTID:40055000 | Chronic sinusitis (score: 0.98)
+
+        # Force rebuild with a different model
+        >>> linker = load_snomed_linker(model_id="sapbert", force=True)
+    """
+    # Resolve model alias if provided
+    model_id = EMBEDDING_MODELS.get(model_id, model_id)
+
+    cache_dir = DEFAULT_CACHE_DIR
+    model_suffix = SNOMEDLinker._get_model_cache_suffix(model_id)
+
+    # If force=True, delete any existing indices matching this name/model
+    if force:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        deleted_count = 0
+        for existing_index in cache_dir.glob(f"{index_name}_*_{model_suffix}.index"):
+            existing_concepts = cache_dir / f"{existing_index.stem}_concepts.json"
+            if verbose:
+                print(f"Deleting existing index: {existing_index.name}")
+            existing_index.unlink(missing_ok=True)
+            existing_concepts.unlink(missing_ok=True)
+            deleted_count += 1
+        # Also check exact name pattern (backward compat)
+        exact_index = cache_dir / f"{index_name}_{model_suffix}.index"
+        exact_concepts = cache_dir / f"{index_name}_{model_suffix}_concepts.json"
+        if exact_index.exists():
+            if verbose:
+                print(f"Deleting existing index: {exact_index.name}")
+            exact_index.unlink(missing_ok=True)
+            exact_concepts.unlink(missing_ok=True)
+            deleted_count += 1
+        if verbose and deleted_count > 0:
+            print(f"Deleted {deleted_count} existing index file(s). Rebuilding...")
+
+    # First check if any matching index exists (with concept count suffix)
+    index_path = None
+    concepts_path = None
+
+    # Look for existing indices matching the pattern
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for existing_index in cache_dir.glob(f"{index_name}_*_{model_suffix}.index"):
+        index_path = existing_index
+        concepts_path = cache_dir / f"{existing_index.stem}_concepts.json"
+        break
+
+    # Fallback to exact name (for backwards compatibility)
+    if index_path is None:
+        index_path = cache_dir / f"{index_name}_{model_suffix}.index"
+        concepts_path = cache_dir / f"{index_name}_{model_suffix}_concepts.json"
+
+    if not index_path.exists():
+        if not auto_download:
+            if force:
+                raise FileNotFoundError(
+                    f"SNOMED index '{index_name}' was deleted (force=True) but cannot rebuild "
+                    f"because auto_download=False.\n\n"
+                    f"Either set auto_download=True to rebuild automatically, or build manually:\n\n"
+                    f"    import synthlab as sl\n"
+                    f"    sl.build_snomed_index('/path/to/CONCEPT.csv')\n"
+                )
+            raise FileNotFoundError(
+                f"SNOMED index '{index_name}' not found at {index_path}\n\n"
+                f"You need to build the index first (one-time operation):\n\n"
+                f"    import synthlab as sl\n"
+                f"    sl.build_snomed_index('/path/to/CONCEPT.csv')\n\n"
+                f"Or enable auto_download=True to download and build automatically.\n"
+            )
+
+        # Auto-download and build
+        if verbose:
+            print("SNOMED index not found. Downloading vocabulary and building index...")
+            print("(This is a one-time operation)")
+
+        from synthlab.download_snomed import get_concept_csv_path
+        concept_csv = get_concept_csv_path()
+
+        if verbose:
+            print(f"\nBuilding SNOMED index from {concept_csv}...")
+
+        # Build the index - this will create files with concept count in name
+        built_path = build_snomed_index(
+            omop_path=concept_csv,
+            model_id=model_id,
+            index_name=index_name,
+            verbose=verbose,
+        )
+
+        # Update paths to match what was built
+        index_path = built_path
+        concepts_path = cache_dir / f"{built_path.stem}_concepts.json"
+
+    linker = SNOMEDLinker(
+        model_id=model_id,
+        index_path=index_path,
+        concepts_path=concepts_path,
+        verbose=verbose,
+    )
+
+    # Force load to verify
+    linker._load_index()
+
+    return linker
+
+
+def list_snomed_indices(verbose: bool = True) -> dict[str, dict]:
+    """
+    List all cached SNOMED indices.
+
+    Returns:
+        Dictionary mapping index names to their info
+    """
+    indices = {}
+    cache_dir = DEFAULT_CACHE_DIR
+
+    if not cache_dir.exists():
+        return indices
+
+    for index_file in cache_dir.glob("*.index"):
+        name = index_file.stem
+        concepts_file = cache_dir / f"{name}_concepts.json"
+
+        # Get concept count
+        n_concepts = 0
+        if concepts_file.exists():
+            try:
+                with open(concepts_file, 'r') as f:
+                    data = json.load(f)
+                    n_concepts = len(data)
+            except Exception:
+                pass
+
+        indices[name] = {
+            "index_path": str(index_file),
+            "concepts_path": str(concepts_file),
+            "n_concepts": n_concepts,
+            "size_mb": index_file.stat().st_size / (1024 * 1024),
+        }
+
+    if verbose:
+        print("Cached SNOMED indices:")
+        if not indices:
+            print("  (none)")
+        for name, info in indices.items():
+            print(f"  {name}: {info['n_concepts']:,} concepts ({info['size_mb']:.1f} MB)")
+
+    return indices
 
 
 # =============================================================================
@@ -1685,20 +2954,73 @@ class GroundedNode:
 
 @dataclass
 class GroundedEdge:
-    """An edge in a grounded causal graph."""
-    source: GroundedNode
+    """
+    An edge in a grounded causal graph, supporting interactions.
+
+    Attributes:
+        sources: List of source nodes (supports single or multiple for interactions)
+        target: The effect/consequent node
+        relation: The relationship type (e.g., "++>", "+>", "->", "=>")
+        interaction: Type of interaction between sources: "and", "or", or None
+
+    Examples:
+        Simple edge: GroundedEdge(sources=[node1], target=node2, relation="++>")
+        AND interaction: GroundedEdge(sources=[node1, node2], target=node3, relation="=>", interaction="and")
+        OR interaction: GroundedEdge(sources=[node1, node2], target=node3, relation="++>", interaction="or")
+    """
+    sources: list[GroundedNode]
     target: GroundedNode
     relation: str
+    interaction: Optional[str] = None  # "and", "or", or None
+
+    def __init__(
+        self,
+        target: GroundedNode,
+        relation: str,
+        source: Optional[GroundedNode] = None,
+        sources: Optional[list[GroundedNode]] = None,
+        interaction: Optional[str] = None,
+    ):
+        """Initialize with backward-compatible single source or new multi-source format."""
+        if sources is not None:
+            self.sources = sources
+        elif source is not None:
+            self.sources = [source]
+        else:
+            self.sources = []
+        self.target = target
+        self.relation = relation
+        self.interaction = interaction
+
+    @property
+    def source(self) -> Optional[GroundedNode]:
+        """Get first source for backward compatibility."""
+        return self.sources[0] if self.sources else None
+
+    @property
+    def is_interaction(self) -> bool:
+        """True if this edge represents an interaction between multiple sources."""
+        return len(self.sources) > 1 and self.interaction is not None
 
     def __str__(self) -> str:
-        return f"{self.source.term} {self.relation} {self.target.term}"
+        if self.is_interaction:
+            op = " && " if self.interaction == "and" else " || "
+            source_str = op.join(s.term for s in self.sources)
+            return f"{source_str} {self.relation} {self.target.term}"
+        return f"{self.source.term} {self.relation} {self.target.term}" if self.source else f"? {self.relation} {self.target.term}"
 
     def to_dict(self) -> dict:
-        return {
-            "source": self.source.to_dict(),
+        result = {
+            "sources": [s.to_dict() for s in self.sources],
             "target": self.target.to_dict(),
             "relation": self.relation,
         }
+        if self.interaction:
+            result["interaction"] = self.interaction
+        # Include legacy "source" key for backward compatibility
+        if self.sources:
+            result["source"] = self.sources[0].to_dict()
+        return result
 
 
 class GroundedCausalGraph:
@@ -1742,8 +3064,17 @@ class GroundedCausalGraph:
             "edges": [e.to_dict() for e in self.edges],
         }
 
-    def to_networkx(self):
-        """Convert to NetworkX DiGraph."""
+    def to_networkx(self, expand_interactions: bool = True):
+        """
+        Convert to NetworkX DiGraph with interaction support.
+
+        Args:
+            expand_interactions: If True (default), create intermediate nodes for
+                A+B->C interactions. If False, create separate edges from each source.
+
+        Returns:
+            NetworkX DiGraph with node and edge attributes.
+        """
         try:
             import networkx as nx
         except ImportError:
@@ -1758,19 +3089,72 @@ class GroundedCausalGraph:
                 mention=node.mention,
                 node_type=node.node_type,
                 confidence=node.confidence,
+                is_interaction=False,
             )
 
         for edge in self.edges:
-            G.add_edge(
-                edge.source.concept_id,
-                edge.target.concept_id,
-                relation=edge.relation,
-            )
+            if edge.is_interaction and expand_interactions:
+                # Create intermediate interaction node
+                op = "AND" if edge.interaction == "and" else "OR"
+                source_ids = [s.concept_id for s in edge.sources]
+                interaction_node_id = f"({' {op} '.join(source_ids)})"
+
+                # Add interaction node
+                G.add_node(
+                    interaction_node_id,
+                    term=f"{op} of {len(edge.sources)} factors",
+                    node_type="interaction",
+                    is_interaction=True,
+                    interaction_type=edge.interaction,
+                    members=source_ids,
+                )
+
+                # Connect sources to interaction node
+                for src in edge.sources:
+                    G.add_edge(
+                        src.concept_id,
+                        interaction_node_id,
+                        relation="member_of",
+                    )
+
+                # Connect interaction node to target
+                G.add_edge(
+                    interaction_node_id,
+                    edge.target.concept_id,
+                    relation=edge.relation,
+                    interaction=edge.interaction,
+                )
+            else:
+                # Simple edge or non-expanded interaction
+                for src in edge.sources:
+                    G.add_edge(
+                        src.concept_id,
+                        edge.target.concept_id,
+                        relation=edge.relation,
+                        interaction=edge.interaction,
+                    )
 
         return G
 
+    def interactions(self, interaction_type: Optional[str] = None) -> list[GroundedEdge]:
+        """
+        Get edges representing interactions (multiple sources).
+
+        Args:
+            interaction_type: Filter by "and" or "or", or None for all interactions
+
+        Returns:
+            List of GroundedEdge objects with multiple sources
+        """
+        if interaction_type:
+            return [e for e in self.edges if e.interaction == interaction_type]
+        return [e for e in self.edges if e.is_interaction]
+
     def __str__(self) -> str:
+        interaction_count = len(self.interactions())
         lines = [f"GroundedCausalGraph: {len(self.nodes)} nodes, {len(self.edges)} edges"]
+        if interaction_count > 0:
+            lines[0] += f" ({interaction_count} interactions)"
         lines.append("\nEdges:")
         for edge in self.edges:
             lines.append(f"  {edge}")
@@ -1854,6 +3238,9 @@ Return ONLY the JSON array, no other text."""
             api_key: API key (or set via environment variable)
             verbose: Print progress messages
         """
+        # Normalize model name for litellm (google/gemini-* -> gemini/gemini-*)
+        if model.startswith("google/gemini"):
+            model = model.replace("google/", "gemini/")
         self.model = model
         self.api_key = api_key
         self.verbose = verbose
@@ -1863,6 +3250,13 @@ Return ONLY the JSON array, no other text."""
         """Get or create the LLM client."""
         if self._client is not None:
             return self._client
+
+        # Load .env file if present (for API keys)
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass  # dotenv not installed, skip
 
         # Try to use litellm for unified API
         try:
@@ -1931,8 +3325,10 @@ Return ONLY the JSON array, no other text."""
 
         except Exception as e:
             if self.verbose:
-                print(f"  Warning: LLM extraction failed: {e}")
-            return []
+                print(f"  ERROR: LLM extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
+            raise RuntimeError(f"Entity extraction failed: {e}") from e
 
         # Parse JSON response
         return self._parse_response(result_text)

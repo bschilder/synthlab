@@ -21,6 +21,7 @@ SOAP Note Structure:
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -31,6 +32,14 @@ from typing import Any, Optional, Union, TYPE_CHECKING
 if TYPE_CHECKING:
     from synthlab.snomed import SNOMEDLinker, GroundedCausalGraph
 
+# Import causal graph types from dedicated module
+from synthlab.causal_graph import (
+    CAUSAL_EDGE_TYPES,
+    CausalNode,
+    CausalEdge,
+    CausalGraph,
+    parse_causal_graph,
+)
 
 # Import count_tokens from utils module
 from synthlab.utils import count_tokens
@@ -76,13 +85,17 @@ _biomcp_available = False
 _biomcp_variant_getter = None
 _biomcp_search_variants = None
 try:
-    from biomcp.variants.search import search_variants as _biomcp_search_variants
-    from biomcp.variants.search import VariantQuery as _BioMCPVariantQuery
-    from biomcp.variants.search import ClinicalSignificance as _BioMCPClinicalSignificance
+    # New API path (biomcp-python >= 0.2)
+    from biomcp.variants.getter import get_variant as _biomcp_get_variant
     _biomcp_available = True
 except ImportError:
-    _BioMCPVariantQuery = None
-    _BioMCPClinicalSignificance = None
+    try:
+        # Old API path (biomcp-python < 0.2)
+        from biomcp.variants.get import variant_getter as _biomcp_get_variant
+        _biomcp_available = True
+    except ImportError:
+        _biomcp_get_variant = None
+        _biomcp_available = False
 
 
 # =============================================================================
@@ -145,6 +158,7 @@ class SOAPNote:
     future_considerations: str = ""
     summary: str = ""
     causal_graph: str = ""  # Causal graph section
+    genetic_summary: str = ""  # Genetic interpretation (generated separately to avoid truncation)
 
     # Metadata
     raw_response: str = field(default="", repr=False)
@@ -199,7 +213,24 @@ class SOAPNote:
             if self.future_considerations:
                 lines.extend(["## Future Considerations", self.future_considerations, ""])
 
-            if self.causal_graph:
+            if self.genetic_summary:
+                lines.extend(["## Genetic Interpretation", self.genetic_summary, ""])
+
+            if self.grounded_causal_graph:
+                # Show SNOMED-grounded causal graph with concept IDs
+                lines.append("## Causal Graph (SNOMED Grounded)")
+                lines.append("")
+                lines.append("### Nodes")
+                for node in self.grounded_causal_graph.nodes:
+                    # Format: Term [type] (SCTID: concept_id) - confidence
+                    lines.append(f"- {node.term} [{node.node_type}] (SCTID: {node.concept_id}) [{node.confidence:.2f}]")
+                lines.append("")
+                lines.append("### Edges")
+                for edge in self.grounded_causal_graph.edges:
+                    # Format: Source --relation--> Target
+                    lines.append(f"- {edge.source.term} --{edge.relation}--> {edge.target.term}")
+                lines.append("")
+            elif self.causal_graph:
                 lines.extend(["## Causal Graph", self.causal_graph, ""])
         else:
             # No sections parsed - show raw response
@@ -324,7 +355,7 @@ class SOAPNote:
         linker: Optional["SNOMEDLinker"] = None,
         embedding_model: Optional[str] = None,
         threshold: float = 0.5,
-        verbose: bool = True,
+        verbose: Union[bool, int] = True,
     ) -> "GroundedCausalGraph":
         """
         Extract and ground the causal graph to SNOMED CT concepts.
@@ -407,6 +438,7 @@ class SOAPNote:
             "future_considerations": self.future_considerations,
             "summary": self.summary,
             "causal_graph": self.causal_graph,
+            "genetic_summary": self.genetic_summary,
             "images_analyzed": self.images_analyzed,
             "time_periods_summarized": self.time_periods_summarized,
             "model_used": self.model_used,
@@ -437,1308 +469,23 @@ class TimePeriodSummary:
     medications_active: list[str] = field(default_factory=list)
 
 
-# =============================================================================
-# Causal Graph Representation
-# =============================================================================
-
-# Edge type definitions with their meanings and numeric weights for graph algorithms
-CAUSAL_EDGE_TYPES = {
-    "++>": {"name": "strongly_increases", "direction": "risk", "strength": "strong", "weight": 0.8},
-    "+>": {"name": "increases", "direction": "risk", "strength": "moderate", "weight": 0.5},
-    "?+>": {"name": "possibly_increases", "direction": "risk", "strength": "uncertain", "weight": 0.3},
-    "-->": {"name": "strongly_decreases", "direction": "protective", "strength": "strong", "weight": -0.8},
-    "->": {"name": "decreases", "direction": "protective", "strength": "moderate", "weight": -0.5},
-    "?->": {"name": "possibly_decreases", "direction": "protective", "strength": "uncertain", "weight": -0.3},
-    "=>": {"name": "causes", "direction": "causal", "strength": "direct", "weight": 1.0},
-}
-
-# Valid node type categories for clinical causal graphs
-NODE_TYPES = {
-    "condition": "Disease, diagnosis, or clinical finding",
-    "medication": "Drug or therapeutic agent",
-    "procedure": "Medical procedure, surgery, or intervention",
-    "lifestyle": "Lifestyle factor or behavior",
-    "symptom": "Patient-reported symptom or sign",
-    "finding": "Lab result, imaging finding, or clinical observation",
-    "outcome": "Clinical outcome or endpoint",
-    "genetic": "Genetic variant, mutation, or polymorphism",
-}
-
-
-def _extract_node_type(node_str: str) -> tuple[str, str]:
-    """
-    Extract node name and type from bracket notation.
-
-    Examples:
-        "Obesity[lifestyle]" -> ("Obesity", "lifestyle")
-        "T2D(2018)[condition]" -> ("T2D(2018)", "condition")
-        "Smoking" -> ("Smoking", "unknown")
-    """
-    match = re.search(r'\[(\w+)\]\s*$', node_str)
-    if match:
-        node_type = match.group(1).lower()
-        name = node_str[:match.start()].strip()
-        # Validate type
-        if node_type not in NODE_TYPES:
-            node_type = "unknown"
-        return name, node_type
-    return node_str.strip(), "unknown"
-
-
-@dataclass
-class CausalNode:
-    """A node in a causal graph representing a clinical entity."""
-    name: str
-    node_type: str = "unknown"
-    time: Optional[str] = None
-
-    def __hash__(self):
-        return hash(self.name)
-
-    def __eq__(self, other):
-        if isinstance(other, CausalNode):
-            return self.name == other.name
-        return self.name == other
-
-
-@dataclass
-class CausalEdge:
-    """
-    A directed edge in a causal graph, supporting interactions.
-
-    Attributes:
-        sources: List of cause/antecedent nodes (supports single or multiple)
-        target: The effect/consequent node (e.g., "Type 2 Diabetes (2018)")
-        edge_type: The relationship type (e.g., "++>", "+>", "->", "=>")
-        interaction: Type of interaction between sources: "and", "or", or None
-        direction: "risk", "protective", or "causal"
-        strength: "strong", "moderate", "uncertain", or "direct"
-        weight: Numeric weight for graph algorithms (-1 to 1)
-
-    Examples:
-        Simple edge: CausalEdge(sources=["Obesity"], target="Diabetes", edge_type="++>")
-        AND interaction: CausalEdge(sources=["DrugA", "DrugB"], target="Toxicity", edge_type="=>", interaction="and")
-        OR interaction: CausalEdge(sources=["BRCA1", "BRCA2"], target="Cancer", edge_type="++>", interaction="or")
-    """
-    sources: list[str]
-    target: str
-    edge_type: str
-    interaction: Optional[str] = None  # "and", "or", or None
-    direction: str = ""
-    strength: str = ""
-    weight: float = 0.0
-
-    def __post_init__(self):
-        # Handle legacy single source as string
-        if isinstance(self.sources, str):
-            self.sources = [self.sources]
-        if self.edge_type in CAUSAL_EDGE_TYPES:
-            info = CAUSAL_EDGE_TYPES[self.edge_type]
-            self.direction = info["direction"]
-            self.strength = info["strength"]
-            self.weight = info["weight"]
-
-    @property
-    def source(self) -> str:
-        """Get source as string (for backward compatibility). Joins with interaction operator."""
-        if len(self.sources) == 1:
-            return self.sources[0]
-        op = " + " if self.interaction == "and" else " | " if self.interaction == "or" else ", "
-        return op.join(self.sources)
-
-    @property
-    def is_interaction(self) -> bool:
-        """True if this edge represents an interaction between multiple sources."""
-        return len(self.sources) > 1 and self.interaction is not None
-
-    @property
-    def source_names(self) -> list[str]:
-        """Extract names without temporal info for all sources."""
-        return [re.sub(r'\s*\([^)]*\)\s*$', '', s).strip() for s in self.sources]
-
-    @property
-    def source_name(self) -> str:
-        """Extract just the name without temporal info (first source for compatibility)."""
-        return self.source_names[0] if self.sources else ""
-
-    @property
-    def target_name(self) -> str:
-        """Extract just the name without temporal info."""
-        return re.sub(r'\s*\([^)]*\)\s*$', '', self.target).strip()
-
-    @property
-    def source_time(self) -> Optional[str]:
-        """Extract temporal info from first source if present."""
-        if not self.sources:
-            return None
-        match = re.search(r'\(([^)]+)\)\s*$', self.sources[0])
-        return match.group(1) if match else None
-
-    @property
-    def target_time(self) -> Optional[str]:
-        """Extract temporal info from target if present."""
-        match = re.search(r'\(([^)]+)\)\s*$', self.target)
-        return match.group(1) if match else None
-
-    @property
-    def source_nodes(self) -> list[CausalNode]:
-        """Get all sources as CausalNode objects with extracted types."""
-        nodes = []
-        for src in self.sources:
-            name, node_type = _extract_node_type(src)
-            clean_name = re.sub(r'\s*\([^)]*\)\s*$', '', name).strip()
-            match = re.search(r'\(([^)]+)\)\s*$', src)
-            time = match.group(1) if match else None
-            nodes.append(CausalNode(name=clean_name, node_type=node_type, time=time))
-        return nodes
-
-    @property
-    def source_node(self) -> CausalNode:
-        """Get first source as a CausalNode (for backward compatibility)."""
-        nodes = self.source_nodes
-        return nodes[0] if nodes else CausalNode(name="", node_type="unknown")
-
-    @property
-    def target_node(self) -> CausalNode:
-        """Get target as a CausalNode with extracted type."""
-        name, node_type = _extract_node_type(self.target)
-        clean_name = re.sub(r'\s*\([^)]*\)\s*$', '', name).strip()
-        time = self.target_time
-        return CausalNode(name=clean_name, node_type=node_type, time=time)
-
-    def __str__(self) -> str:
-        return f"{self.source} {self.edge_type} {self.target}"
-
-    def __hash__(self):
-        """Hash based on normalized sources, target, and edge type."""
-        # Sort sources for consistent hashing regardless of order
-        source_key = tuple(sorted(s.lower().strip() for s in self.sources))
-        target_key = self.target.lower().strip()
-        return hash((source_key, target_key, self.edge_type))
-
-    def __eq__(self, other):
-        """Two edges are equal if they have the same sources, target, and edge type."""
-        if not isinstance(other, CausalEdge):
-            return False
-        # Normalize for comparison (case-insensitive, sorted sources)
-        self_sources = sorted(s.lower().strip() for s in self.sources)
-        other_sources = sorted(s.lower().strip() for s in other.sources)
-        return (
-            self_sources == other_sources
-            and self.target.lower().strip() == other.target.lower().strip()
-            and self.edge_type == other.edge_type
-        )
-
-
-@dataclass
-class CausalGraph:
-    """
-    A directed graph of causal relationships extracted from clinical notes.
-
-    Compatible with NetworkX. Tracks edge relationships and node types.
-
-    Example:
-        >>> graph = soap_note.extract_causal_graph()
-        >>> print(graph.summary())
-        >>>
-        >>> # Query by node type
-        >>> conditions = graph.nodes_by_type("condition")
-        >>> medications = graph.nodes_by_type("medication")
-        >>>
-        >>> # Convert to NetworkX
-        >>> G = graph.to_networkx()
-        >>> nx.shortest_path(G, "Obesity", "Neuropathy")
-    """
-    edges: list[CausalEdge] = field(default_factory=list)
-    _node_types: dict[str, str] = field(default_factory=dict)
-    raw_text: str = ""
-
-    @property
-    def nodes(self) -> set[str]:
-        """Get all unique node names."""
-        nodes = set()
-        for edge in self.edges:
-            # Handle multiple sources for interaction edges
-            for name in edge.source_names:
-                nodes.add(name)
-            nodes.add(edge.target_name)
-        return nodes
-
-    def get_node(self, name: str) -> CausalNode:
-        """Get a node with its type (from manual override or edge extraction)."""
-        node_type = self._node_types.get(name, "unknown")
-        return CausalNode(name=name, node_type=node_type)
-
-    def get_nodes(self) -> list[CausalNode]:
-        """Get all nodes as CausalNode objects with types from edges."""
-        # Build type map from edges (edge extraction takes precedence)
-        type_map = dict(self._node_types)
-        for edge in self.edges:
-            # Handle multiple source nodes for interactions
-            for src in edge.source_nodes:
-                if src.node_type != "unknown":
-                    type_map[src.name] = src.node_type
-            tgt = edge.target_node
-            if tgt.node_type != "unknown":
-                type_map[tgt.name] = tgt.node_type
-
-        return [CausalNode(name=name, node_type=type_map.get(name, "unknown"))
-                for name in self.nodes]
-
-    def nodes_by_type(self, node_type: str) -> list[CausalNode]:
-        """Get all nodes of a specific type (condition, medication, etc)."""
-        return [n for n in self.get_nodes() if n.node_type == node_type]
-
-    def set_node_type(self, name: str, node_type: str):
-        """Manually override a node's type."""
-        self._node_types[name] = node_type
-
-    def risk_factors(self, target: str) -> list[CausalEdge]:
-        """Get edges that increase probability of target."""
-        target_lower = target.lower()
-        return [e for e in self.edges
-                if e.direction == "risk" and target_lower in e.target.lower()]
-
-    def protective_factors(self, target: str) -> list[CausalEdge]:
-        """Get edges that decrease probability of target."""
-        target_lower = target.lower()
-        return [e for e in self.edges
-                if e.direction == "protective" and target_lower in e.target.lower()]
-
-    def consequences_of(self, source: str) -> list[CausalEdge]:
-        """Get all edges originating from source."""
-        source_lower = source.lower()
-        return [e for e in self.edges if source_lower in e.source.lower()]
-
-    def causes_of(self, target: str) -> list[CausalEdge]:
-        """Get all edges pointing to target."""
-        target_lower = target.lower()
-        return [e for e in self.edges if target_lower in e.target.lower()]
-
-    def edges_by_direction(self, direction: str) -> list[CausalEdge]:
-        """Get edges by direction ('risk', 'protective', 'causal')."""
-        return [e for e in self.edges if e.direction == direction]
-
-    def interactions(self, interaction_type: Optional[str] = None) -> list[CausalEdge]:
-        """
-        Get edges representing interactions (multiple sources).
-
-        Args:
-            interaction_type: Filter by "and" or "or", or None for all interactions
-
-        Returns:
-            List of CausalEdge objects with multiple sources
-        """
-        if interaction_type:
-            return [e for e in self.edges if e.interaction == interaction_type]
-        return [e for e in self.edges if e.is_interaction]
-
-    def causal_chains(self, start: str, max_depth: int = 5) -> list[list[CausalEdge]]:
-        """Find all causal chains starting from a node."""
-        chains = []
-        start_lower = start.lower()
-
-        def dfs(current: str, path: list[CausalEdge], depth: int):
-            if depth >= max_depth:
-                return
-            for edge in self.edges:
-                if current.lower() in edge.source.lower() and edge not in path:
-                    new_path = path + [edge]
-                    chains.append(new_path)
-                    dfs(edge.target_name, new_path, depth + 1)
-
-        dfs(start, [], 0)
-        return chains
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary with node types and interaction info."""
-        return {
-            "nodes": [{"name": n.name, "type": n.node_type} for n in self.get_nodes()],
-            "edges": [{
-                "sources": e.sources,
-                "source": e.source,  # Combined string for compatibility
-                "target": e.target,
-                "type": e.edge_type,
-                "interaction": e.interaction,
-                "direction": e.direction,
-                "strength": e.strength,
-                "weight": e.weight,
-            } for e in self.edges],
-        }
-
-    def to_networkx(self, expand_interactions: bool = True):
-        """
-        Convert to NetworkX DiGraph with node and edge attributes.
-
-        Node attributes: node_type, time, is_interaction
-        Edge attributes: edge_type, direction, strength, weight, source_time, target_time, interaction
-
-        For interaction edges (A + B => C), if expand_interactions=True (default),
-        creates an intermediate "interaction node" to represent the combined effect.
-        This allows standard graph algorithms to work with interactions.
-
-        Example:
-            >>> G = graph.to_networkx()
-            >>> # Get condition nodes
-            >>> [n for n, d in G.nodes(data=True) if d.get('node_type') == 'condition']
-            >>> # Get risk edges
-            >>> [(u, v) for u, v, d in G.edges(data=True) if d['direction'] == 'risk']
-            >>> # Find interaction nodes
-            >>> [n for n, d in G.nodes(data=True) if d.get('is_interaction')]
-        """
-        try:
-            import networkx as nx
-        except ImportError:
-            raise ImportError("networkx required: pip install networkx")
-
-        G = nx.DiGraph()
-
-        # Add nodes with types
-        for node in self.get_nodes():
-            G.add_node(node.name, node_type=node.node_type, time=node.time, is_interaction=False)
-
-        # Add edges with attributes
-        for edge in self.edges:
-            if edge.is_interaction and expand_interactions:
-                # Create intermediate interaction node
-                op = "AND" if edge.interaction == "and" else "OR"
-                interaction_node = f"({' {op} '.join(edge.source_names)})"
-
-                # Add interaction node
-                G.add_node(interaction_node, node_type="interaction", is_interaction=True,
-                           interaction_type=edge.interaction, members=edge.source_names)
-
-                # Connect sources to interaction node
-                for src_node in edge.source_nodes:
-                    G.add_edge(
-                        src_node.name, interaction_node,
-                        edge_type="member_of", direction="interaction",
-                        strength="", weight=0.0,
-                    )
-
-                # Connect interaction node to target
-                G.add_edge(
-                    interaction_node, edge.target_name,
-                    edge_type=edge.edge_type, direction=edge.direction,
-                    strength=edge.strength, weight=edge.weight,
-                    target_time=edge.target_time, interaction=edge.interaction,
-                )
-            else:
-                # Simple edge or non-expanded interaction
-                for src_name in edge.source_names:
-                    G.add_edge(
-                        src_name, edge.target_name,
-                        edge_type=edge.edge_type, direction=edge.direction,
-                        strength=edge.strength, weight=edge.weight,
-                        source_time=edge.source_time, target_time=edge.target_time,
-                        interaction=edge.interaction,
-                    )
-        return G
-
-    @classmethod
-    def from_networkx(cls, G) -> "CausalGraph":
-        """Create CausalGraph from NetworkX DiGraph."""
-        edges = []
-        node_types = {}
-
-        for node, data in G.nodes(data=True):
-            if "node_type" in data and data["node_type"] != "interaction":
-                node_types[node] = data["node_type"]
-
-        for u, v, data in G.edges(data=True):
-            edge_type = data.get("edge_type", "=>")
-            interaction = data.get("interaction")
-            # Skip member_of edges (internal to interaction representation)
-            if edge_type == "member_of":
-                continue
-            edges.append(CausalEdge(sources=[u], target=v, edge_type=edge_type, interaction=interaction))
-
-        graph = cls(edges=edges)
-        graph._node_types = node_types
-        return graph
-
-    def ground_to_snomed(
-        self,
-        linker: "SNOMEDLinker" = None,
-        threshold: float = 0.5,
-        verbose: bool = True,
-    ) -> "GroundedCausalGraph":
-        """
-        Ground all nodes to SNOMED CT concepts using SapBERT + FAISS.
-
-        This method links each node in the causal graph to its closest
-        SNOMED CT concept, providing standardized concept IDs.
-
-        Args:
-            linker: SNOMEDLinker instance. If None, creates a new one.
-            threshold: Minimum similarity score for matches (0-1)
-            verbose: Print progress messages
-
-        Returns:
-            GroundedCausalGraph with SNOMED-linked nodes
-
-        Example:
-            >>> graph = soap_note.extract_causal_graph()
-            >>> grounded = graph.ground_to_snomed()
-            >>> for node in grounded.nodes:
-            ...     print(f"{node.mention} -> SCTID:{node.concept_id}")
-        """
-        # Import here to avoid circular dependency
-        from synthlab.snomed import (
-            SNOMEDLinker,
-            GroundedNode,
-            GroundedEdge,
-            GroundedCausalGraph,
-        )
-
-        if linker is None:
-            linker = SNOMEDLinker(verbose=verbose)
-
-        # Get all unique node names
-        all_nodes = self.get_nodes()
-
-        if verbose:
-            print(f"Grounding {len(all_nodes)} nodes to SNOMED CT...")
-
-        # Link all nodes in batch
-        mentions = [node.name for node in all_nodes]
-        results = linker.link_batch(mentions, k=1, threshold=threshold)
-
-        # Build grounded nodes
-        grounded_nodes = {}
-        unmatched = []
-
-        for node, (mention, matches) in zip(all_nodes, results):
-            if matches:
-                match = matches[0]
-                grounded_node = GroundedNode(
-                    mention=mention,
-                    concept_id=match.concept_id,
-                    term=match.term,
-                    node_type=node.node_type,
-                    confidence=match.score,
-                )
-                grounded_nodes[mention] = grounded_node
-            else:
-                unmatched.append(mention)
-
-        if verbose and unmatched:
-            print(f"  Warning: {len(unmatched)} nodes could not be matched:")
-            for m in unmatched[:5]:
-                print(f"    - {m}")
-            if len(unmatched) > 5:
-                print(f"    ... and {len(unmatched) - 5} more")
-
-        # Build grounded edges
-        grounded_edges = []
-        for edge in self.edges:
-            # Get source nodes (handle interactions)
-            source_mentions = edge.source_names
-            target_mention = edge.target_name
-
-            # Skip if any node is unmatched
-            sources_grounded = [grounded_nodes.get(m) for m in source_mentions]
-            target_grounded = grounded_nodes.get(target_mention)
-
-            if all(sources_grounded) and target_grounded:
-                # For interactions, use first source for simplicity
-                # (could be extended to handle multi-source edges)
-                for src in sources_grounded:
-                    grounded_edges.append(GroundedEdge(
-                        source=src,
-                        target=target_grounded,
-                        relation=edge.edge_type,
-                    ))
-
-        grounded_graph = GroundedCausalGraph(
-            nodes=list(grounded_nodes.values()),
-            edges=grounded_edges,
-        )
-
-        if verbose:
-            print(f"  Grounded: {len(grounded_nodes)}/{len(all_nodes)} nodes, "
-                  f"{len(grounded_edges)}/{len(self.edges)} edges")
-
-        return grounded_graph
-
-    def to_mermaid(self) -> str:
-        """Generate Mermaid diagram syntax with interaction support."""
-        lines = ["graph LR"]
-
-        def clean_node(name: str) -> str:
-            """Clean node name for mermaid (remove [type], replace spaces)."""
-            name = re.sub(r'\[[\w]+\]', '', name).strip()
-            name = re.sub(r'\s*\([^)]*\)\s*$', '', name).strip()
-            return re.sub(r'[^\w\s]', '', name).replace(' ', '_')
-
-        for idx, edge in enumerate(self.edges):
-            tgt = clean_node(edge.target_name)
-
-            # Edge style based on direction
-            if edge.direction == "risk":
-                style = "-->"
-                label = "risk"
-            elif edge.direction == "protective":
-                style = "-.->"
-                label = "protects"
-            else:
-                style = "==>"
-                label = "causes"
-
-            if edge.is_interaction:
-                # Create descriptive interaction node
-                interaction_type = "AND" if edge.interaction == "and" else "OR"
-                src_names = [clean_node(n) for n in edge.source_names]
-                interaction_id = f"combo_{idx}"
-
-                # Connect sources to interaction node with descriptive label
-                for src in src_names:
-                    lines.append(f"    {src} --> {interaction_id}[{interaction_type}]")
-
-                # Connect interaction node to target
-                lines.append(f"    {interaction_id} {style}|{label}| {tgt}")
-            else:
-                src = clean_node(edge.source_name)
-                lines.append(f"    {src} {style}|{label}| {tgt}")
-
-        # Add styling
-        lines.extend([
-            "",
-            "    classDef condition fill:#D64550,color:white",
-            "    classDef medication fill:#4A90A4,color:white",
-            "    classDef lifestyle fill:#E59866,color:white",
-            "    classDef finding fill:#58A87C,color:white",
-        ])
-        return "\n".join(lines)
-
-    def summary(self) -> str:
-        """Get a summary of the graph."""
-        type_counts = {}
-        for n in self.get_nodes():
-            type_counts[n.node_type] = type_counts.get(n.node_type, 0) + 1
-        dir_counts = {}
-        interaction_count = 0
-        for e in self.edges:
-            dir_counts[e.direction] = dir_counts.get(e.direction, 0) + 1
-            if e.is_interaction:
-                interaction_count += 1
-
-        summary = (f"CausalGraph: {len(self.nodes)} nodes, {len(self.edges)} edges\n"
-                   f"Nodes: {', '.join(f'{k}={v}' for k, v in sorted(type_counts.items()))}\n"
-                   f"Edges: {', '.join(f'{k}={v}' for k, v in sorted(dir_counts.items()))}")
-        if interaction_count > 0:
-            summary += f"\nInteractions: {interaction_count} (AND/OR combinations)"
-        return summary
-
-    def __str__(self) -> str:
-        return self.summary()
-
-    def __len__(self) -> int:
-        return len(self.edges)
-
-    def plot(
-        self,
-        figsize: tuple[float, float] = (12, 8),
-        title: Optional[str] = None,
-        show_legend: bool = True,
-        save_path: Optional[str] = None,
-        dpi: int = 300,
-        node_shape: str = "rectangle",
-        label_inside: bool = True,
-        node_width: float = 1.2,
-        node_height: float = 0.5,
-        font_size: int = 9,
-        interactive: bool = False,
-        notebook: bool = True,
-        height: str = "600px",
-        width: str = "100%",
-    ):
-        """
-        Create a publication-quality visualization of the causal graph.
-
-        Interactions (A + B -> C) are shown with arrows converging at a
-        small junction point before reaching the target.
-
-        Args:
-            figsize: Figure size in inches (width, height).
-            title: Plot title. If None, no title shown.
-            show_legend: Whether to show the legend.
-            save_path: If provided, save figure to this path (PNG for static, HTML for interactive).
-            dpi: Resolution for saved figure (static only).
-            node_shape: Shape of nodes - "rectangle" or "circle".
-            label_inside: If True, labels inside nodes. If False, beside nodes.
-            node_width: Width of rectangle nodes (only used if node_shape="rectangle").
-            node_height: Height of rectangle nodes (only used if node_shape="rectangle").
-            font_size: Font size for node labels.
-            interactive: If True, create an interactive visualization using pyvis.
-            notebook: If True and interactive, render inline in Jupyter notebook.
-            height: Height of interactive plot (e.g., "600px").
-            width: Width of interactive plot (e.g., "100%" or "800px").
-
-        Returns:
-            For static: matplotlib Figure and Axes objects (fig, ax).
-            For interactive: pyvis Network object.
-        """
-        # Handle interactive plotting with pyvis
-        if interactive:
-            return self._plot_interactive(
-                title=title,
-                save_path=save_path,
-                notebook=notebook,
-                height=height,
-                width=width,
-            )
-
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib.patches as mpatches
-            import networkx as nx
-        except ImportError:
-            raise ImportError("matplotlib and networkx required: pip install matplotlib networkx")
-
-        if len(self.edges) == 0:
-            fig, ax = plt.subplots(figsize=figsize)
-            ax.text(0.5, 0.5, "No causal relationships found",
-                    ha='center', va='center', fontsize=11, color='#888')
-            ax.axis('off')
-            return fig, ax
-
-        # Color palette - nodes by type
-        type_colors = {
-            "condition": "#E15759",   # Red
-            "medication": "#4E79A7",  # Blue
-            "procedure": "#B07AA1",   # Purple
-            "lifestyle": "#F28E2B",   # Orange
-            "symptom": "#76B7B2",     # Teal
-            "finding": "#59A14F",     # Green
-            "outcome": "#555555",     # Dark gray
-            "unknown": "#AAAAAA",     # Light gray
-        }
-
-        # Edge colors by interaction type (not direction)
-        # AND interactions = red, OR interactions = blue, simple = black
-        # Edge colors by direction (risk/protective/causal)
-        edge_colors = {
-            'risk': '#C44E52',       # Red - increases risk
-            'protective': '#4C72B0', # Blue - decreases risk
-            'causal': '#333333',     # Black - causes
-        }
-
-        def clean_name(s: str) -> str:
-            """Strip [type] suffix and clean for display."""
-            s = re.sub(r'\[[\w]+\]', '', s).strip()
-            s = re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
-            return s.replace('_', ' ')
-
-        # Build graph with only real concept nodes
-        G = nx.DiGraph()
-        node_types = {}
-
-        for node in self.get_nodes():
-            name = clean_name(node.name)
-            if name:
-                G.add_node(name)
-                node_types[name] = node.node_type
-
-        # Collect edges, tracking interactions separately
-        simple_edges = []      # (src, tgt, direction)
-        interaction_edges = [] # ([src1, src2, ...], tgt, direction, interaction_type)
-
-        for edge in self.edges:
-            tgt = clean_name(edge.target_name)
-            sources = [clean_name(s) for s in edge.source_names]
-            sources = [s for s in sources if s and s != tgt]
-
-            if not sources or not tgt:
-                continue
-
-            if edge.is_interaction and len(sources) > 1:
-                interaction_edges.append((sources, tgt, edge.direction, edge.interaction))
-                # Add edges to graph for layout
-                for src in sources:
-                    G.add_edge(src, tgt)
-            else:
-                for src in sources:
-                    simple_edges.append((src, tgt, edge.direction))
-                    G.add_edge(src, tgt)
-
-        if G.number_of_nodes() == 0:
-            fig, ax = plt.subplots(figsize=figsize)
-            ax.axis('off')
-            return fig, ax
-
-        # Compute layout
-        import warnings
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            try:
-                # Try graphviz for hierarchical layout
-                pos = nx.nx_agraph.graphviz_layout(G, prog='dot', args='-Grankdir=LR -Gnodesep=0.8')
-            except Exception:
-                try:
-                    if nx.is_directed_acyclic_graph(G):
-                        gens = list(nx.topological_generations(G))
-                        pos = {}
-                        for gi, gen in enumerate(gens):
-                            for ni, node in enumerate(sorted(gen)):
-                                pos[node] = (gi * 2.5, ni - len(gen) / 2)
-                    else:
-                        pos = nx.spring_layout(G, k=2.5, iterations=100, seed=42)
-                except Exception:
-                    pos = nx.spring_layout(G, k=2.5, iterations=100, seed=42)
-
-        # Create figure
-        fig, ax = plt.subplots(figsize=figsize, facecolor='white')
-        ax.set_facecolor('white')
-
-        # Scaling for node size based on layout bounds
-        if pos:
-            xs = [p[0] for p in pos.values()]
-            ys = [p[1] for p in pos.values()]
-            x_range = max(xs) - min(xs) if len(xs) > 1 else 1
-            y_range = max(ys) - min(ys) if len(ys) > 1 else 1
-            scale = min(x_range, y_range) / 10 if min(x_range, y_range) > 0 else 0.3
-            node_radius = max(0.15, min(0.4, scale))
-        else:
-            node_radius = 0.3
-
-        # Calculate shrink values based on node shape
-        if node_shape == "rectangle":
-            shrink_val = max(node_width, node_height) * 35  # Shrink for rectangles
-        else:
-            shrink_val = node_radius * 50  # Shrink for circles
-
-        # Draw simple edges (solid lines, color by direction)
-        for src, tgt, direction in simple_edges:
-            if src not in pos or tgt not in pos:
-                continue
-            x1, y1 = pos[src]
-            x2, y2 = pos[tgt]
-            edge_color = edge_colors.get(direction, '#333333')
-            ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
-                arrowprops=dict(arrowstyle='-|>', color=edge_color, lw=1.5,
-                               shrinkA=shrink_val, shrinkB=shrink_val,
-                               connectionstyle='arc3,rad=0.1'))
-
-        # Draw interaction edges with junction points
-        # Color by direction (risk=red, protective=blue, causal=black)
-        # Line style by interaction: solid=simple, dotted=AND, dashed=OR
-        for sources, tgt, direction, interaction_type in interaction_edges:
-            if tgt not in pos:
-                continue
-            valid_sources = [s for s in sources if s in pos]
-
-            # Choose color based on direction (risk/protective/causal)
-            edge_color = edge_colors.get(direction, '#333333')
-            # Choose line style based on interaction type: dotted=AND, dashed=OR
-            if interaction_type == "or":
-                linestyle = '--'   # Dashed for OR
-            elif interaction_type == "and":
-                linestyle = ':'    # Dotted for AND
-            else:
-                linestyle = '-'    # Solid (fallback)
-
-            if len(valid_sources) < 2:
-                # Fall back to simple edges
-                for src in valid_sources:
-                    x1, y1 = pos[src]
-                    x2, y2 = pos[tgt]
-                    ax.annotate('', xy=(x2, y2), xytext=(x1, y1),
-                        arrowprops=dict(arrowstyle='-|>', color=edge_color, lw=1.5,
-                                       linestyle=linestyle,
-                                       shrinkA=shrink_val, shrinkB=shrink_val,
-                                       connectionstyle='arc3,rad=0.1'))
-                continue
-
-            # Calculate junction point (weighted average closer to target)
-            src_positions = [pos[s] for s in valid_sources]
-            tgt_x, tgt_y = pos[tgt]
-            avg_x = sum(p[0] for p in src_positions) / len(src_positions)
-            avg_y = sum(p[1] for p in src_positions) / len(src_positions)
-            # Junction at 70% toward target
-            junc_x = avg_x + 0.7 * (tgt_x - avg_x)
-            junc_y = avg_y + 0.7 * (tgt_y - avg_y)
-
-            # Draw lines from each source to junction (no arrowhead)
-            for src in valid_sources:
-                x1, y1 = pos[src]
-                ax.annotate('', xy=(junc_x, junc_y), xytext=(x1, y1),
-                    arrowprops=dict(arrowstyle='-', color=edge_color, lw=1.5,
-                                   linestyle=linestyle,
-                                   shrinkA=shrink_val, shrinkB=0,
-                                   connectionstyle='arc3,rad=0.05'))
-
-            # Draw junction point (small filled circle)
-            junc_circle = plt.Circle((junc_x, junc_y), node_radius * 0.3,
-                                     color=edge_color, ec='white', lw=1, zorder=15)
-            ax.add_patch(junc_circle)
-
-            # Draw arrow from junction to target
-            ax.annotate('', xy=(tgt_x, tgt_y), xytext=(junc_x, junc_y),
-                arrowprops=dict(arrowstyle='-|>', color=edge_color, lw=2,
-                               linestyle=linestyle,
-                               shrinkA=0, shrinkB=shrink_val))
-
-        # Draw nodes and labels
-        for node in G.nodes():
-            if node not in pos:
-                continue
-            x, y = pos[node]
-            ntype = node_types.get(node, 'unknown')
-            color = type_colors.get(ntype, '#AAA')
-
-            # Wrap long labels
-            label = node
-            max_chars = 18 if label_inside else 15
-            if len(label) > max_chars:
-                words = label.split()
-                lines = []
-                current_line = []
-                for word in words:
-                    current_line.append(word)
-                    if len(' '.join(current_line)) > max_chars:
-                        lines.append(' '.join(current_line))
-                        current_line = []
-                if current_line:
-                    lines.append(' '.join(current_line))
-                label = '\n'.join(lines)
-
-            if node_shape == "rectangle":
-                # Calculate node dimensions based on label length
-                n_lines = label.count('\n') + 1
-                rect_h = node_height * max(1, n_lines * 0.7)
-                rect_w = node_width
-
-                # Draw rounded rectangle
-                rect = mpatches.FancyBboxPatch(
-                    (x - rect_w / 2, y - rect_h / 2), rect_w, rect_h,
-                    boxstyle="round,pad=0.02,rounding_size=0.1",
-                    facecolor=color, edgecolor='white', linewidth=2, zorder=20
-                )
-                ax.add_patch(rect)
-
-                if label_inside:
-                    # Label inside rectangle
-                    ax.text(x, y, label, fontsize=font_size, ha='center', va='center',
-                           fontweight='medium', color='white', zorder=25)
-                else:
-                    # Label beside rectangle
-                    ax.text(x + rect_w / 2 + 0.1, y, label,
-                           fontsize=font_size, ha='left', va='center',
-                           fontweight='medium', color='#333')
-            else:
-                # Circle shape (original behavior)
-                circle = plt.Circle((x, y), node_radius, color=color, ec='white', lw=2, zorder=20)
-                ax.add_patch(circle)
-
-                if label_inside:
-                    ax.text(x, y, label, fontsize=font_size - 1, ha='center', va='center',
-                           fontweight='medium', color='white', zorder=25)
-                else:
-                    ax.text(x + node_radius + 0.1, y, label,
-                           fontsize=font_size, ha='left', va='center',
-                           fontweight='medium', color='#333')
-
-        # Legend
-        if show_legend:
-            legend_elements = []
-            present_types = set(node_types.values())
-
-            for ntype in ['condition', 'medication', 'lifestyle', 'finding', 'symptom', 'procedure', 'outcome']:
-                if ntype in present_types:
-                    color = type_colors.get(ntype, '#AAA')
-                    legend_elements.append(
-                        mpatches.Patch(facecolor=color, edgecolor='white', label=ntype.capitalize())
-                    )
-
-            # Edge direction legend (colors)
-            all_directions = set(e[2] for e in simple_edges) | set(e[2] for e in interaction_edges)
-            legend_elements.append(mpatches.Patch(facecolor='white', edgecolor='white', label=''))
-            for direction in ['risk', 'protective', 'causal']:
-                if direction in all_directions:
-                    color = edge_colors[direction]
-                    label_text = {'risk': 'Increases risk', 'protective': 'Protective', 'causal': 'Causes'}[direction]
-                    legend_elements.append(
-                        plt.Line2D([0], [0], color=color, lw=2, linestyle='-', label=label_text)
-                    )
-
-            # Line style legend (interaction types)
-            has_and = any(e[3] == "and" for e in interaction_edges)
-            has_or = any(e[3] == "or" for e in interaction_edges)
-            if simple_edges or has_and or has_or:
-                legend_elements.append(mpatches.Patch(facecolor='white', edgecolor='white', label=''))
-            if simple_edges:
-                legend_elements.append(
-                    plt.Line2D([0], [0], color='#666', lw=2, linestyle='-', label='Simple (A→B)')
-                )
-            if has_and:
-                legend_elements.append(
-                    plt.Line2D([0], [0], color='#666', lw=2, linestyle=':', label='AND (A+B→C)')
-                )
-            if has_or:
-                legend_elements.append(
-                    plt.Line2D([0], [0], color='#666', lw=2, linestyle='--', label='OR (A|B→C)')
-                )
-
-            if legend_elements:
-                legend = ax.legend(
-                    handles=legend_elements, loc='upper left',
-                    bbox_to_anchor=(1.02, 1), frameon=True,
-                    fontsize=9, title='Legend', title_fontsize=10,
-                )
-                legend.get_frame().set_facecolor('white')
-                legend.get_frame().set_edgecolor('#CCC')
-
-        if title:
-            ax.set_title(title, fontsize=13, fontweight='bold', pad=15, color='#333')
-
-        # Clean up
-        ax.set_aspect('equal')
-        ax.axis('off')
-
-        # Adjust limits with padding
-        if pos:
-            xs = [p[0] for p in pos.values()]
-            ys = [p[1] for p in pos.values()]
-            margin = 1.5
-            ax.set_xlim(min(xs) - margin, max(xs) + margin + 3)  # Extra space for labels
-            ax.set_ylim(min(ys) - margin, max(ys) + margin)
-
-        plt.tight_layout()
-
-        # Save if path provided
-        if save_path:
-            fig.savefig(save_path, dpi=dpi, bbox_inches='tight',
-                       facecolor='white', edgecolor='none')
-            print(f"Saved to {save_path}")
-
-        return fig, ax
-
-    def _plot_interactive(
-        self,
-        title: Optional[str] = None,
-        save_path: Optional[str] = None,
-        notebook: bool = True,
-        height: str = "600px",
-        width: str = "100%",
-    ):
-        """
-        Create an interactive visualization of the causal graph using pyvis.
-
-        Args:
-            title: Plot title.
-            save_path: If provided, save HTML to this path.
-            notebook: If True, render inline in Jupyter notebook.
-            height: Height of the plot.
-            width: Width of the plot.
-
-        Returns:
-            pyvis Network object.
-        """
-        try:
-            from pyvis.network import Network
-        except ImportError:
-            raise ImportError("pyvis required for interactive plots: pip install pyvis")
-
-        # Color palette - nodes by type
-        type_colors = {
-            "condition": "#E15759",   # Red
-            "medication": "#4E79A7",  # Blue
-            "procedure": "#B07AA1",   # Purple
-            "lifestyle": "#F28E2B",   # Orange
-            "symptom": "#76B7B2",     # Teal
-            "finding": "#59A14F",     # Green
-            "outcome": "#555555",     # Dark gray
-            "unknown": "#AAAAAA",     # Light gray
-        }
-
-        # Edge colors by direction
-        edge_colors = {
-            'risk': '#C44E52',       # Red - increases risk
-            'protective': '#4C72B0', # Blue - decreases risk
-            'causal': '#333333',     # Black - causes
-        }
-
-        def clean_name(s: str) -> str:
-            """Strip [type] suffix and clean for display."""
-            s = re.sub(r'\[[\w]+\]', '', s).strip()
-            s = re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
-            return s.replace('_', ' ')
-
-        # Create network
-        net = Network(
-            height=height,
-            width=width,
-            directed=True,
-            notebook=notebook,
-            bgcolor="#ffffff",
-            font_color="#333333",
-        )
-
-        # Configure physics for better layout
-        net.set_options("""
-        {
-            "nodes": {
-                "font": {"size": 14, "face": "arial"},
-                "borderWidth": 2,
-                "borderWidthSelected": 3
-            },
-            "edges": {
-                "arrows": {"to": {"enabled": true, "scaleFactor": 0.8}},
-                "smooth": {"type": "curvedCW", "roundness": 0.2},
-                "font": {"size": 10, "align": "middle"}
-            },
-            "physics": {
-                "hierarchicalRepulsion": {
-                    "centralGravity": 0.0,
-                    "springLength": 150,
-                    "springConstant": 0.01,
-                    "nodeDistance": 180
-                },
-                "solver": "hierarchicalRepulsion"
-            },
-            "layout": {
-                "hierarchical": {
-                    "enabled": true,
-                    "direction": "LR",
-                    "sortMethod": "directed",
-                    "levelSeparation": 200,
-                    "nodeSpacing": 100
-                }
-            },
-            "interaction": {
-                "hover": true,
-                "tooltipDelay": 100,
-                "navigationButtons": true,
-                "keyboard": {"enabled": true}
-            }
-        }
-        """)
-
-        if len(self.edges) == 0:
-            net.add_node("empty", label="No causal relationships found", color="#888888")
-            if save_path:
-                net.save_graph(save_path)
-            if notebook:
-                return net.show(save_path or "causal_graph.html")
-            return net
-
-        # Collect all nodes
-        node_types = {}
-        for node in self.get_nodes():
-            name = clean_name(node.name)
-            if name:
-                node_types[name] = node.node_type
-
-        # Add nodes
-        for name, ntype in node_types.items():
-            color = type_colors.get(ntype, "#AAAAAA")
-            net.add_node(
-                name,
-                label=name,
-                color=color,
-                title=f"{name}\nType: {ntype.capitalize()}",
-                shape="box",
-                font={"color": "white"},
-            )
-
-        # Add edges
-        edge_id = 0
-        for edge in self.edges:
-            tgt = clean_name(edge.target_name)
-            sources = [clean_name(s) for s in edge.source_names]
-            sources = [s for s in sources if s and s != tgt and s in node_types]
-
-            if not sources or not tgt or tgt not in node_types:
-                continue
-
-            edge_color = edge_colors.get(edge.direction, '#333333')
-
-            # Determine line style (dashes) based on interaction type
-            if edge.is_interaction and edge.interaction == "and":
-                dashes = [5, 5]  # Dotted for AND
-                interaction_label = " (AND)"
-            elif edge.is_interaction and edge.interaction == "or":
-                dashes = [10, 5]  # Dashed for OR
-                interaction_label = " (OR)"
-            else:
-                dashes = False
-                interaction_label = ""
-
-            # Build tooltip
-            direction_label = {
-                'risk': 'increases risk of',
-                'protective': 'protects against',
-                'causal': 'causes'
-            }.get(edge.direction, 'affects')
-
-            for src in sources:
-                tooltip = f"{src} {direction_label} {tgt}{interaction_label}"
-                net.add_edge(
-                    src,
-                    tgt,
-                    color=edge_color,
-                    title=tooltip,
-                    dashes=dashes,
-                    width=2,
-                )
-                edge_id += 1
-
-        # Add title if provided
-        if title:
-            net.heading = title
-
-        # Save or show
-        if save_path:
-            net.save_graph(save_path)
-            print(f"Saved interactive graph to {save_path}")
-
-        if notebook:
-            return net.show(save_path or "causal_graph.html")
-
-        return net
-
-
-def _parse_interaction_sources(source_str: str) -> tuple[list[str], Optional[str]]:
-    """
-    Parse source string for interaction operators (+ for AND, | for OR).
-
-    Args:
-        source_str: Source part of a causal expression
-
-    Returns:
-        (list of sources, interaction type or None)
-
-    Examples:
-        "DrugA + DrugB" -> (["DrugA", "DrugB"], "and")
-        "BRCA1 | BRCA2" -> (["BRCA1", "BRCA2"], "or")
-        "Obesity" -> (["Obesity"], None)
-    """
-    # Check for AND interaction (but not inside brackets or edge operators)
-    # Use word boundary to avoid matching ++ in edge types
-    if ' + ' in source_str and not any(et in source_str for et in CAUSAL_EDGE_TYPES.keys()):
-        parts = [p.strip() for p in source_str.split(' + ') if p.strip()]
-        if len(parts) > 1:
-            return parts, "and"
-
-    # Check for OR interaction
-    if ' | ' in source_str:
-        parts = [p.strip() for p in source_str.split(' | ') if p.strip()]
-        if len(parts) > 1:
-            return parts, "or"
-
-    return [source_str], None
-
-
-def parse_causal_graph(text: str) -> CausalGraph:
-    """
-    Parse causal relationships from text into a CausalGraph.
-
-    Recognizes the notation:
-    - ++>  strongly increases probability
-    - +>   increases probability
-    - ?+>  possibly increases
-    - -->  strongly decreases probability
-    - ->   decreases probability
-    - ?->  possibly decreases
-    - =>   direct causation
-
-    Also supports interaction notation:
-    - A + B => C  (A AND B together cause C)
-    - A | B => C  (A OR B causes C, either sufficient)
-
-    Args:
-        text: Text containing causal relationships (e.g., from SOAP note assessment)
-
-    Returns:
-        CausalGraph with parsed edges
-
-    Example:
-        >>> text = '''
-        ... Obesity[lifestyle] ++> Diabetes[condition]
-        ... DrugA[medication] + DrugB[medication] => Liver_failure[condition]
-        ... BRCA1[finding] | BRCA2[finding] ++> Breast_cancer[condition]
-        ... '''
-        >>> graph = parse_causal_graph(text)
-        >>> print(len(graph.edges))
-        3
-        >>> print(graph.edges[1].interaction)
-        and
-    """
-    edges = []
-
-    # Edge types sorted by length (longest first) to match correctly
-    edge_types_pattern = "|".join(
-        re.escape(et) for et in sorted(CAUSAL_EDGE_TYPES.keys(), key=len, reverse=True)
-    )
-
-    for line in text.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('```'):
-            continue
-
-        # Strip leading # or - (markdown list/header markers) but keep content
-        if line.startswith('#'):
-            line = line.lstrip('#').strip()
-        if line.startswith('-'):
-            line = line.lstrip('-').strip()
-        if line.startswith('*'):
-            line = line.lstrip('*').strip()
-
-        if not line:
-            continue
-
-        # Check if this line contains any edge types
-        if not any(et in line for et in CAUSAL_EDGE_TYPES.keys()):
-            continue
-
-        # Split on edge operators, keeping them as separators
-        parts = re.split(rf'({edge_types_pattern})', line)
-        parts = [p.strip() for p in parts if p.strip()]
-
-        # Process pairs: (source, edge_type, target, edge_type, target2, ...)
-        i = 0
-        while i < len(parts) - 2:
-            source_str = parts[i]
-            if parts[i + 1] in CAUSAL_EDGE_TYPES:
-                edge_type = parts[i + 1]
-                target = parts[i + 2]
-
-                # Clean up source and target
-                source_str = source_str.strip(' -,')
-                target = target.strip(' -,')
-
-                # Parse interaction operators in source
-                sources, interaction = _parse_interaction_sources(source_str)
-
-                if sources and target:
-                    edge = CausalEdge(
-                        sources=sources,
-                        target=target,
-                        edge_type=edge_type,
-                        interaction=interaction,
-                    )
-                    # Only add if not a duplicate (using __eq__ for comparison)
-                    if edge not in edges:
-                        edges.append(edge)
-                i += 2  # Move to target, which becomes next source
-            else:
-                i += 1
-
-    return CausalGraph(edges=edges, raw_text=text)
-
 
 # =============================================================================
 # BioMCP Variant Annotation (Optional)
 # =============================================================================
 
 
-async def _annotate_variant_biomcp(rsid: str) -> Optional[dict]:
+async def _annotate_variant_biomcp(rsid: str, verbose: bool = False) -> Optional[dict]:
     """
     Annotate a single variant using BioMCP.
 
+    BioMCP returns data from MyVariant.info with a deeply nested structure containing
+    data from multiple sources (ClinVar, gnomAD, dbNSFP, CADD, etc.). This function
+    extracts relevant fields from this nested structure.
+
     Args:
         rsid: rsID of the variant (e.g., "rs121913529")
+        verbose: If True, print debug information
 
     Returns:
         Dict with variant annotations or None if not found/error
@@ -1747,57 +494,296 @@ async def _annotate_variant_biomcp(rsid: str) -> Optional[dict]:
         return None
 
     try:
-        import asyncio
+        import json
         # Try to get variant info - this is an async call
-        # Note: This requires the biomcp-python package
-        from biomcp.variants.get import variant_getter
-        result = await variant_getter(variant_id=rsid)
-        if result:
-            # Extract phenotypes/disease associations
-            phenotypes = []
-            if hasattr(result, "phenotypes"):
-                phenotypes = getattr(result, "phenotypes", [])
-            elif hasattr(result, "conditions"):
-                phenotypes = getattr(result, "conditions", [])
+        # Use the module-level import (handles both old and new API paths)
+        # Use output_json=True to get structured data and include_external=True for comprehensive annotations
+        result_str = await _biomcp_get_variant(variant_id=rsid, output_json=True, include_external=True)
+        if verbose:
+            print(f"      [DEBUG] BioMCP get_variant({rsid}) returned: {type(result_str).__name__}, length: {len(result_str) if result_str else 0}")
+            if result_str:
+                print(f"      [DEBUG]   Preview: {result_str[:500]}...")
 
-            # Extract drug associations (pharmacogenomics)
-            drug_associations = []
-            if hasattr(result, "drugs"):
-                drug_associations = getattr(result, "drugs", [])
-            elif hasattr(result, "drug_associations"):
-                drug_associations = getattr(result, "drug_associations", [])
+        if not result_str:
+            return None
 
-            # Extract clinical actionability
-            actionability = None
-            if hasattr(result, "actionability"):
-                actionability = getattr(result, "actionability", None)
+        # Parse JSON response
+        try:
+            parsed = json.loads(result_str) if isinstance(result_str, str) else result_str
+        except json.JSONDecodeError:
+            if verbose:
+                print(f"      [DEBUG]   Failed to parse JSON, using raw response")
+            return {"rsid": rsid, "raw": result_str}
 
-            # Get review status for confidence
-            review_status = None
-            if hasattr(result, "review_status"):
-                review_status = getattr(result, "review_status", None)
+        # BioMCP returns a list of variants - take the first one
+        if isinstance(parsed, list):
+            if not parsed:
+                return None
+            result = parsed[0]
+        else:
+            result = parsed
 
-            return {
-                "rsid": rsid,
-                "clinical_significance": getattr(result, "clinical_significance", None),
-                "conditions": phenotypes if phenotypes else getattr(result, "conditions", []),
-                "phenotypes": phenotypes,
-                "gene": getattr(result, "gene", {}).get("symbol") if hasattr(result, "gene") else None,
-                "protein_change": getattr(result, "protein_change", None),
-                "frequencies": getattr(result, "frequencies", {}),
-                "predictions": getattr(result, "predictions", {}),
-                "drug_associations": drug_associations,
-                "actionability": actionability,
-                "review_status": review_status,
-                # Try to get effect direction from phenotype associations
-                "effect_type": getattr(result, "effect_type", None),  # protective, risk, etc.
-            }
-    except Exception:
-        pass
+        if verbose:
+            print(f"      [DEBUG]   Parsed result keys: {list(result.keys()) if isinstance(result, dict) else type(result)}")
+            # Show samples from key nested objects for debugging
+            if isinstance(result, dict):
+                for key in ["clinvar", "dbnsfp", "cadd", "gnomad_exome", "gnomad_genome", "dbsnp", "snpeff", "pharmgkb"]:
+                    if key in result:
+                        val = result[key]
+                        if isinstance(val, dict):
+                            print(f"      [DEBUG]   {key} keys: {list(val.keys())[:15]}")
+                        else:
+                            print(f"      [DEBUG]   {key}: {type(val).__name__}")
+                # If verbose >= 2, dump the full result for debugging
+                print(f"      [DEBUG]   Full result (first 2000 chars):")
+                import json as _json
+                print(f"      {_json.dumps(result, indent=2, default=str)[:2000]}")
+
+        if not result or not isinstance(result, dict):
+            return None
+
+        # Helper to safely get nested values
+        def _get_nested(obj, *keys, default=None):
+            """Get a nested value from a dict, handling missing keys gracefully."""
+            current = obj
+            for key in keys:
+                if isinstance(current, dict):
+                    current = current.get(key)
+                elif isinstance(current, list) and current:
+                    # Take first element if it's a list
+                    current = current[0] if len(current) > 0 else None
+                    if isinstance(current, dict):
+                        current = current.get(key)
+                    else:
+                        return default
+                else:
+                    return default
+                if current is None:
+                    return default
+            return current if current is not None else default
+
+        # Extract gene symbol from multiple possible sources
+        gene_symbol = (
+            _get_nested(result, "cadd", "gene", "genename") or
+            _get_nested(result, "cadd", "gene", "gene_id") or
+            _get_nested(result, "dbnsfp", "genename") or
+            _get_nested(result, "dbsnp", "gene", "symbol") or
+            _get_nested(result, "snpeff", "gene_name")
+        )
+        # Handle case where genename is a list
+        if isinstance(gene_symbol, list):
+            gene_symbol = gene_symbol[0] if gene_symbol else None
+
+        # Extract clinical significance from ClinVar
+        clinical_significance = (
+            _get_nested(result, "clinvar", "clinical_significance") or
+            _get_nested(result, "clinvar", "rcv", "clinical_significance")
+        )
+        # ClinVar can return a list of significances
+        if isinstance(clinical_significance, list):
+            clinical_significance = ", ".join(clinical_significance)
+
+        # Extract review status from ClinVar
+        review_status = _get_nested(result, "clinvar", "review_status")
+        if isinstance(review_status, list):
+            review_status = review_status[0] if review_status else None
+
+        # Extract conditions/phenotypes from ClinVar
+        conditions = []
+        rcv_data = _get_nested(result, "clinvar", "rcv")
+        if rcv_data:
+            if isinstance(rcv_data, list):
+                for rcv in rcv_data:
+                    if isinstance(rcv, dict):
+                        cond = rcv.get("conditions")
+                        if cond:
+                            if isinstance(cond, list):
+                                conditions.extend(cond)
+                            else:
+                                conditions.append(cond)
+            elif isinstance(rcv_data, dict):
+                cond = rcv_data.get("conditions")
+                if cond:
+                    if isinstance(cond, list):
+                        conditions.extend(cond)
+                    else:
+                        conditions.append(cond)
+        # Also check clinvar.gene.conditions
+        gene_conditions = _get_nested(result, "clinvar", "gene", "conditions")
+        if gene_conditions:
+            if isinstance(gene_conditions, list):
+                conditions.extend(gene_conditions)
+            else:
+                conditions.append(gene_conditions)
+
+        # Extract condition names from dict objects and deduplicate
+        condition_names = []
+        seen_conditions = set()
+        for cond in conditions:
+            if isinstance(cond, dict):
+                # ClinVar condition objects have 'name' or 'preferred_name' field
+                cond_name = cond.get("name") or cond.get("preferred_name") or cond.get("trait") or str(cond)
+            else:
+                cond_name = str(cond)
+            if cond_name and cond_name not in seen_conditions:
+                condition_names.append(cond_name)
+                seen_conditions.add(cond_name)
+        conditions = condition_names
+
+        # Extract protein change
+        protein_change = (
+            _get_nested(result, "dbnsfp", "aa_change") or
+            _get_nested(result, "cadd", "aa_change") or
+            _get_nested(result, "snpeff", "hgvs_p")
+        )
+        if isinstance(protein_change, list):
+            protein_change = protein_change[0] if protein_change else None
+
+        # Extract population frequencies
+        frequencies = {}
+        # gnomAD exome
+        gnomad_exome_af = _get_nested(result, "gnomad_exome", "af", "af")
+        if gnomad_exome_af is None:
+            gnomad_exome_af = _get_nested(result, "gnomad_exome", "af")
+        if gnomad_exome_af is not None:
+            frequencies["gnomad_exome"] = gnomad_exome_af
+        # gnomAD genome
+        gnomad_genome_af = _get_nested(result, "gnomad_genome", "af", "af")
+        if gnomad_genome_af is None:
+            gnomad_genome_af = _get_nested(result, "gnomad_genome", "af")
+        if gnomad_genome_af is not None:
+            frequencies["gnomad_genome"] = gnomad_genome_af
+        # dbSNP
+        dbsnp_af = _get_nested(result, "dbsnp", "allele_origin")
+        if dbsnp_af is not None:
+            frequencies["dbsnp"] = dbsnp_af
+        # ExAC
+        exac_af = _get_nested(result, "exac", "af")
+        if exac_af is not None:
+            frequencies["exac"] = exac_af
+        # 1000 Genomes
+        tg_af = _get_nested(result, "1000g", "af") or _get_nested(result, "1000genomes", "af")
+        if tg_af is not None:
+            frequencies["1000genomes"] = tg_af
+
+        # Extract computational predictions
+        predictions = {}
+        # CADD
+        cadd_phred = _get_nested(result, "cadd", "phred")
+        if cadd_phred is not None:
+            predictions["cadd_phred"] = cadd_phred
+        cadd_raw = _get_nested(result, "cadd", "raw_score")
+        if cadd_raw is not None:
+            predictions["cadd_raw"] = cadd_raw
+        # SIFT
+        sift_pred = _get_nested(result, "dbnsfp", "sift", "pred")
+        if sift_pred is None:
+            sift_pred = _get_nested(result, "dbnsfp", "sift_pred")
+        if sift_pred is not None:
+            predictions["sift"] = sift_pred[0] if isinstance(sift_pred, list) else sift_pred
+        sift_score = _get_nested(result, "dbnsfp", "sift", "score")
+        if sift_score is not None:
+            predictions["sift_score"] = sift_score[0] if isinstance(sift_score, list) else sift_score
+        # PolyPhen-2
+        polyphen_pred = _get_nested(result, "dbnsfp", "polyphen2", "hvar", "pred")
+        if polyphen_pred is None:
+            polyphen_pred = _get_nested(result, "dbnsfp", "polyphen2_hvar_pred")
+        if polyphen_pred is not None:
+            predictions["polyphen2"] = polyphen_pred[0] if isinstance(polyphen_pred, list) else polyphen_pred
+        polyphen_score = _get_nested(result, "dbnsfp", "polyphen2", "hvar", "score")
+        if polyphen_score is not None:
+            predictions["polyphen2_score"] = polyphen_score[0] if isinstance(polyphen_score, list) else polyphen_score
+
+        # Extract drug associations (pharmacogenomics)
+        drug_associations = []
+        pharmgkb = _get_nested(result, "pharmgkb")
+        if pharmgkb:
+            if isinstance(pharmgkb, dict):
+                drugs = pharmgkb.get("drugs") or pharmgkb.get("drug")
+                if drugs:
+                    if isinstance(drugs, list):
+                        drug_associations.extend(drugs)
+                    else:
+                        drug_associations.append(drugs)
+
+        # Construct the normalized annotation dict
+        annotation = {
+            "rsid": rsid,
+            "clinical_significance": clinical_significance,
+            "conditions": conditions,
+            "phenotypes": conditions,  # Alias for backward compatibility
+            "gene": gene_symbol,
+            "protein_change": protein_change,
+            "frequencies": frequencies if frequencies else {},
+            "predictions": predictions if predictions else {},
+            "drug_associations": drug_associations,
+            "actionability": None,  # Not directly available in MyVariant.info
+            "review_status": review_status,
+            "effect_type": None,  # Would need to infer from clinical_significance
+        }
+
+        if verbose:
+            non_empty = {k: v for k, v in annotation.items() if v and v != {}}
+            print(f"      [DEBUG]   Extracted annotation: {non_empty}")
+
+        return annotation
+
+    except Exception as e:
+        if verbose:
+            import traceback
+            print(f"      [DEBUG] BioMCP variant_getter({rsid}) exception: {e}")
+            traceback.print_exc()
+        # Don't silently swallow - return None but log the error
     return None
 
 
-def annotate_variants_biomcp(rsids: list[str], max_variants: int = 20) -> dict[str, dict]:
+def test_biomcp_response(rsid: str = "rs699") -> dict:
+    """
+    Test function to debug what BioMCP actually returns for a variant.
+
+    Usage:
+        from synthlab.soap import test_biomcp_response
+        result = test_biomcp_response("rs699")
+        print(result)
+    """
+    if not _biomcp_available:
+        return {"error": "biomcp-python not installed"}
+
+    import asyncio
+    import json
+
+    async def _fetch():
+        result_str = await _biomcp_get_variant(variant_id=rsid, output_json=True, include_external=True)
+        return result_str
+
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    result_str = loop.run_until_complete(_fetch())
+
+    if not result_str:
+        return {"error": "No response from BioMCP"}
+
+    try:
+        parsed = json.loads(result_str) if isinstance(result_str, str) else result_str
+    except json.JSONDecodeError as e:
+        return {"error": f"JSON decode error: {e}", "raw": result_str[:1000]}
+
+    # Return raw structure for inspection
+    return {
+        "raw_type": type(parsed).__name__,
+        "is_list": isinstance(parsed, list),
+        "length": len(parsed) if isinstance(parsed, list) else None,
+        "first_item_keys": list(parsed[0].keys()) if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict) else None,
+        "top_keys": list(parsed.keys()) if isinstance(parsed, dict) else None,
+        "raw_preview": str(parsed)[:2000],
+    }
+
+
+def annotate_variants_biomcp(rsids: list[str], max_variants: int = 20, verbose: bool = False) -> dict[str, dict]:
     """
     Annotate multiple variants using BioMCP (synchronous wrapper).
 
@@ -1808,6 +794,7 @@ def annotate_variants_biomcp(rsids: list[str], max_variants: int = 20) -> dict[s
     Args:
         rsids: List of rsIDs to annotate
         max_variants: Maximum number of variants to query (to avoid rate limits)
+        verbose: If True, print debug information
 
     Returns:
         Dict mapping rsID to annotation dict
@@ -1818,16 +805,27 @@ def annotate_variants_biomcp(rsids: list[str], max_variants: int = 20) -> dict[s
         "Pathogenic"
     """
     if not _biomcp_available:
+        if verbose:
+            print(f"    [DEBUG] BioMCP not available (biomcp-python not installed)")
         return {}
+
+    if verbose:
+        print(f"    [DEBUG] annotate_variants_biomcp called with {len(rsids)} rsIDs, max={max_variants}")
+        if rsids:
+            print(f"    [DEBUG] First few rsIDs: {rsids[:5]}")
 
     import asyncio
 
     async def _annotate_batch():
         results = {}
-        for rsid in rsids[:max_variants]:
-            annotation = await _annotate_variant_biomcp(rsid)
+        for i, rsid in enumerate(rsids[:max_variants]):
+            if verbose and i == 0:
+                print(f"    [DEBUG] Querying first variant for detailed debug...")
+            annotation = await _annotate_variant_biomcp(rsid, verbose=(verbose and i == 0))
             if annotation:
                 results[rsid] = annotation
+            elif verbose and i == 0:
+                print(f"    [DEBUG] First variant {rsid} returned None (no data or error)")
         return results
 
     try:
@@ -1838,11 +836,21 @@ def annotate_variants_biomcp(rsids: list[str], max_variants: int = 20) -> dict[s
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, _annotate_batch())
-                return future.result()
+                result = future.result()
+                if verbose:
+                    print(f"    [DEBUG] BioMCP returned {len(result)} annotations (async context)")
+                return result
         else:
-            return asyncio.run(_annotate_batch())
-    except Exception:
-        return {}
+            result = asyncio.run(_annotate_batch())
+            if verbose:
+                print(f"    [DEBUG] BioMCP returned {len(result)} annotations")
+            return result
+    except Exception as e:
+        # Re-raise with more context instead of silently returning empty
+        raise RuntimeError(
+            f"BioMCP annotation failed for {len(rsids)} rsIDs: {e}. "
+            f"First few rsIDs: {rsids[:5]}"
+        ) from e
 
 
 # =============================================================================
@@ -1862,6 +870,8 @@ class FHIRFormatter:
         patient: Any,
         max_tokens: int = 50000,
         use_biomcp: bool = False,
+        include_genomics: bool = True,
+        verbose: bool = False,
     ) -> tuple[str, dict[str, Any]]:
         """
         Format patient data as structured text for LLM input.
@@ -1871,6 +881,10 @@ class FHIRFormatter:
             max_tokens: Approximate max tokens (characters / 4)
             use_biomcp: If True, use BioMCP to enrich genetic variant annotations.
                         Requires: pip install biomcp-python
+            include_genomics: If True, include genomics section in output text.
+                        Set to False when generating genetic summary separately
+                        to avoid truncation in main SOAP note.
+            verbose: If True, print debug information
 
         Returns:
             Tuple of (formatted_text, biomcp_annotations)
@@ -1910,17 +924,40 @@ class FHIRFormatter:
         if procedures:
             sections.append(FHIRFormatter._format_procedures(procedures))
 
-        # Genomics (if available)
-        if hasattr(patient, 'genomics') and patient.genomics is not None:
+        # Genomics (if available and requested)
+        if include_genomics and hasattr(patient, 'genomics') and patient.genomics is not None:
+            if verbose:
+                print(f"    [DEBUG] format_patient_for_llm: include_genomics=True, calling _format_genomics")
             try:
                 genomics_text, genomics_biomcp = FHIRFormatter._format_genomics(
                     patient.genomics,
                     use_biomcp=use_biomcp,
+                    verbose=verbose,
                 )
                 sections.append(genomics_text)
                 biomcp_annotations = genomics_biomcp
-            except Exception:
-                pass  # Skip if genomics formatting fails
+            except Exception as e:
+                if verbose:
+                    import traceback
+                    print(f"    [DEBUG] Genomics formatting failed (include=True): {e}")
+                    traceback.print_exc()
+        elif not include_genomics and hasattr(patient, 'genomics') and patient.genomics is not None:
+            # Still collect BioMCP annotations even if not including genomics text
+            if verbose:
+                print(f"    [DEBUG] format_patient_for_llm: include_genomics=False, calling _format_genomics for BioMCP only")
+            try:
+                _, genomics_biomcp = FHIRFormatter._format_genomics(
+                    patient.genomics,
+                    use_biomcp=use_biomcp,
+                    verbose=verbose,
+                )
+                biomcp_annotations = genomics_biomcp
+                # Add placeholder noting genetic data exists
+                sections.append("## GENETIC / GENOMIC FINDINGS\n[Genetic interpretation generated separately - see Genetic Interpretation section]")
+            except Exception as e:
+                import traceback
+                print(f"    [DEBUG] Genomics formatting failed: {e}")
+                traceback.print_exc()
 
         # Combine and truncate if needed
         full_text = "\n\n".join(sections)
@@ -2093,6 +1130,7 @@ class FHIRFormatter:
     def _format_genomics(
         genomics_df: Any,
         use_biomcp: bool = False,
+        verbose: bool = False,
     ) -> tuple[str, dict[str, Any]]:
         """
         Format genomics data for LLM input.
@@ -2106,6 +1144,7 @@ class FHIRFormatter:
                         clinical significance, associated conditions, and functional
                         predictions. Requires biomcp-python package.
                         See: https://biomcp.org/apis/python-sdk/
+            verbose: If True, print debug information
 
         Returns:
             Tuple of (formatted_text, biomcp_annotations_dict)
@@ -2115,6 +1154,11 @@ class FHIRFormatter:
         biomcp_raw = {}  # Store raw bioMCP annotations
         lines = ["## GENETIC / GENOMIC FINDINGS"]
 
+        if verbose:
+            print(f"    [DEBUG] _format_genomics called: use_biomcp={use_biomcp}, df_type={type(genomics_df)}")
+            if genomics_df is not None:
+                print(f"    [DEBUG] genomics_df has {len(genomics_df)} rows")
+
         if genomics_df is None or len(genomics_df) == 0:
             lines.append("No genetic data available.")
             return "\n".join(lines), biomcp_raw
@@ -2122,28 +1166,55 @@ class FHIRFormatter:
         # Filter to variants the patient has (VARIANT == true)
         try:
             patient_variants = genomics_df.filter(genomics_df["VARIANT"] == True)
-        except Exception:
+            if verbose:
+                print(f"    [DEBUG] Filtered VARIANT==True: {len(patient_variants)} variants")
+        except Exception as e:
             # Try string comparison if boolean doesn't work
+            if verbose:
+                print(f"    [DEBUG] VARIANT==True filter failed: {e}, trying string")
             try:
                 patient_variants = genomics_df.filter(genomics_df["VARIANT"] == "true")
-            except Exception:
+                if verbose:
+                    print(f"    [DEBUG] Filtered VARIANT=='true': {len(patient_variants)} variants")
+            except Exception as e2:
+                if verbose:
+                    print(f"    [DEBUG] VARIANT=='true' filter also failed: {e2}, using all rows")
                 patient_variants = genomics_df
 
         if len(patient_variants) == 0:
+            if verbose:
+                print(f"    [DEBUG] No patient variants after filtering, returning early")
             lines.append("No clinically significant genetic variants detected.")
             return "\n".join(lines), biomcp_raw
 
-        # Categorize by clinical significance
-        significance_order = [
-            "Pathogenic",
-            "Likely Pathogenic",
-            "Risk Factor",
-            "Uncertain",
-        ]
+        # Categorize by clinical significance - use actual values from data, not hard-coded list
+        # Priority order for display (higher priority = shown first)
+        # Based on clinical actionability, not a fixed list
+        significance_priority = {
+            "pathogenic": 1,
+            "likely pathogenic": 2,
+            "risk factor": 3,
+            "drug response": 4,
+            "protective": 5,
+            "association": 6,
+            "affects": 7,
+            "uncertain significance": 8,
+            "likely benign": 9,
+            "benign": 10,
+            "conflicting": 11,
+        }
 
-        # Get unique variants (dedupe by rsID)
+        def get_priority(sig_str: str) -> int:
+            """Get priority for a significance string (lower = more important)."""
+            sig_lower = str(sig_str).lower()
+            for key, priority in significance_priority.items():
+                if key in sig_lower:
+                    return priority
+            return 100  # Unknown categories go last
+
+        # Get unique variants (dedupe by rsID), group by actual significance
         seen_variants = set()
-        categorized = {sig: [] for sig in significance_order}
+        categorized: dict[str, list] = {}
 
         for row in patient_variants.iter_rows(named=True):
             rsid = row.get("INDEX_PREFIX", row.get("INDEX", "Unknown"))
@@ -2152,7 +1223,7 @@ class FHIRFormatter:
             seen_variants.add(rsid)
 
             gene = row.get("GENE", "Unknown")
-            significance = row.get("CLINICAL_SIGNIFICANCE", "Unknown")
+            significance = str(row.get("CLINICAL_SIGNIFICANCE", "Unknown")).strip()
             chrom = row.get("CHROMOSOME", "?")
             allele = row.get("ALLELE", "")
             ancestral = row.get("ANCESTRAL_ALLELE", "")
@@ -2163,21 +1234,33 @@ class FHIRFormatter:
             if not is_variant:
                 continue
 
-            # Categorize
-            for sig in significance_order:
-                if sig.lower() in str(significance).lower():
-                    categorized[sig].append({
-                        "rsid": rsid,
-                        "gene": gene,
-                        "chrom": chrom,
-                        "significance": significance,
-                        "allele": allele,
-                    })
-                    break
+            # Group by actual significance value from the data
+            if significance not in categorized:
+                categorized[significance] = []
+            categorized[significance].append({
+                "rsid": rsid,
+                "gene": gene,
+                "chrom": chrom,
+                "significance": significance,
+                "allele": allele,
+            })
 
-        # Format output - prioritize clinically significant variants
-        for sig in ["Pathogenic", "Likely Pathogenic", "Risk Factor"]:
-            variants = categorized.get(sig, [])
+        # Sort categories by clinical priority and format output
+        sorted_categories = sorted(categorized.keys(), key=get_priority)
+
+        if verbose:
+            total_variants = sum(len(v) for v in categorized.values())
+            print(f"    [DEBUG] Categorized {total_variants} unique variants into {len(categorized)} categories")
+            for sig, variants in categorized.items():
+                n_with_rs = sum(1 for v in variants if v['rsid'].startswith('rs'))
+                print(f"    [DEBUG]   {sig}: {len(variants)} variants ({n_with_rs} with rs prefix)")
+
+        for sig in sorted_categories:
+            variants = categorized[sig]
+            # Skip benign variants unless there's nothing else
+            sig_lower = sig.lower()
+            if "benign" in sig_lower and len(sorted_categories) > 1:
+                continue
             if variants:
                 lines.append(f"\n### {sig} Variants")
                 for v in variants[:10]:  # Limit per category
@@ -2193,36 +1276,12 @@ class FHIRFormatter:
                 lines.append(f"\n### Variants of Uncertain Significance")
                 lines.append(f"Found {len(uncertain)} VUS across genes: {', '.join(sorted(genes_with_uncertain)[:10])}")
 
-        # Clinical notes for specific well-known genes
-        clinically_relevant_genes = {
-            "BRCA1": "breast/ovarian cancer risk",
-            "BRCA2": "breast/ovarian cancer risk",
-            "PCSK9": "cholesterol metabolism, cardiovascular risk",
-            "F5": "Factor V Leiden, thrombosis risk",
-            "APOE": "Alzheimer's disease, cardiovascular risk",
-            "MTHFR": "folate metabolism",
-            "CYP2C19": "drug metabolism (clopidogrel, PPIs)",
-            "CYP2D6": "drug metabolism (codeine, tamoxifen)",
-            "TNNT2": "cardiomyopathy risk",
-            "PSEN2": "early-onset Alzheimer's disease",
-            "LDLR": "familial hypercholesterolemia",
-            "MYH7": "cardiomyopathy risk",
-        }
-
-        noted_genes = set()
-        for sig in ["Pathogenic", "Likely Pathogenic", "Risk Factor"]:
-            for v in categorized.get(sig, []):
-                gene = v['gene']
-                if gene in clinically_relevant_genes and gene not in noted_genes:
-                    noted_genes.add(gene)
-
-        if noted_genes:
-            lines.append("\n### Clinical Relevance Notes")
-            for gene in sorted(noted_genes):
-                lines.append(f"- {gene}: Associated with {clinically_relevant_genes[gene]}")
-
-        # BioMCP enrichment (optional)
+        # BioMCP enrichment provides real clinical annotations from ClinVar, PharmGKB, etc.
+        # This replaces any hard-coded gene lists with actual database-backed information
         if use_biomcp and _biomcp_available:
+            if verbose:
+                print(f"    [DEBUG] BioMCP available, processing variants")
+                print(f"    [DEBUG] categorized has {len(categorized)} categories: {list(categorized.keys())}")
             # Get rsIDs of ALL variants for enrichment (not just pathogenic)
             all_rsids = []
             for category_variants in categorized.values():
@@ -2230,23 +1289,38 @@ class FHIRFormatter:
                     if v['rsid'].startswith("rs"):
                         all_rsids.append(v['rsid'])
 
+            if verbose:
+                print(f"    [DEBUG] Found {len(all_rsids)} rsIDs starting with 'rs'")
+
             if all_rsids:
-                # Prioritize: pathogenic first, then risk factors, then others
-                priority_order = ["Pathogenic", "Likely Pathogenic", "Risk Factor", "Protective"]
+                # Sort variants by clinical priority (pathogenic first, then risk factors, etc.)
+                # Use the same priority function defined earlier
+                all_variants_with_priority = []
+                for sig, variants in categorized.items():
+                    priority = get_priority(sig)
+                    for v in variants:
+                        if v['rsid'].startswith("rs"):
+                            all_variants_with_priority.append((priority, v['rsid']))
+
+                # Sort by priority and dedupe
+                all_variants_with_priority.sort(key=lambda x: x[0])
                 prioritized_rsids = []
                 seen = set()
-                for sig in priority_order:
-                    for v in categorized.get(sig, []):
-                        if v['rsid'].startswith("rs") and v['rsid'] not in seen:
-                            prioritized_rsids.append(v['rsid'])
-                            seen.add(v['rsid'])
-                # Add remaining rsIDs
-                for rsid in all_rsids:
+                for _, rsid in all_variants_with_priority:
                     if rsid not in seen:
                         prioritized_rsids.append(rsid)
                         seen.add(rsid)
 
-                biomcp_annotations = annotate_variants_biomcp(prioritized_rsids, max_variants=20)
+                if verbose:
+                    print(f"    [DEBUG] Calling annotate_variants_biomcp with {len(prioritized_rsids)} prioritized rsIDs")
+
+                biomcp_annotations = annotate_variants_biomcp(prioritized_rsids, max_variants=20, verbose=verbose)
+                if not biomcp_annotations:
+                    # BioMCP returned nothing - warn but continue (API might have issues)
+                    if verbose:
+                        print(f"    [WARNING] BioMCP returned 0 annotations for {len(prioritized_rsids)} rsIDs")
+                        print(f"    [WARNING] rsIDs sent: {prioritized_rsids[:5]}{'...' if len(prioritized_rsids) > 5 else ''}")
+                        print(f"    [WARNING] Continuing without BioMCP enrichment")
                 if biomcp_annotations:
                     # Store raw annotations before summarizing
                     biomcp_raw = biomcp_annotations
@@ -2258,10 +1332,12 @@ class FHIRFormatter:
                         gene = ann.get("gene", "")
                         gene_str = f" ({gene})" if gene else ""
                         ann_lines = [f"**{rsid}{gene_str}**"]
+                        has_data = False  # Track if we found any clinical data
 
                         # Clinical significance with review status
                         clin_sig = ann.get("clinical_significance")
                         if clin_sig:
+                            has_data = True
                             review = ann.get("review_status", "")
                             review_str = f" [{review}]" if review else ""
                             ann_lines.append(f"  - Clinical significance: {clin_sig}{review_str}")
@@ -2269,6 +1345,7 @@ class FHIRFormatter:
                         # Disease/phenotype associations - THIS IS KEY
                         conditions = ann.get("conditions") or ann.get("phenotypes") or []
                         if conditions:
+                            has_data = True
                             if len(conditions) <= 3:
                                 conditions_str = ", ".join(str(c) for c in conditions)
                             else:
@@ -2278,43 +1355,71 @@ class FHIRFormatter:
                         # Effect type (protective vs risk) if available
                         effect = ann.get("effect_type")
                         if effect:
+                            has_data = True
                             ann_lines.append(f"  - Effect: {effect}")
 
                         # Drug associations (pharmacogenomics)
                         drugs = ann.get("drug_associations") or []
                         if drugs:
+                            has_data = True
                             drugs_str = ", ".join(str(d) for d in drugs[:3])
                             ann_lines.append(f"  - Drug interactions: {drugs_str}")
 
                         # Actionability
                         if ann.get("actionability"):
+                            has_data = True
                             ann_lines.append(f"  - Actionability: {ann['actionability']}")
 
-                        # Functional predictions
+                        # Functional predictions (handle both old and new field names)
                         predictions = ann.get("predictions", {})
                         pred_parts = []
-                        if predictions.get("cadd"):
-                            pred_parts.append(f"CADD={predictions['cadd']}")
-                        if predictions.get("polyphen"):
-                            pred_parts.append(f"PolyPhen={predictions['polyphen']}")
-                        if predictions.get("sift"):
-                            pred_parts.append(f"SIFT={predictions['sift']}")
+                        # CADD score
+                        cadd = predictions.get("cadd_phred") or predictions.get("cadd")
+                        if cadd:
+                            pred_parts.append(f"CADD={cadd}")
+                        # PolyPhen-2 prediction
+                        polyphen = predictions.get("polyphen2") or predictions.get("polyphen")
+                        if polyphen:
+                            pred_parts.append(f"PolyPhen={polyphen}")
+                        # SIFT prediction
+                        sift = predictions.get("sift")
+                        if sift:
+                            pred_parts.append(f"SIFT={sift}")
                         if pred_parts:
+                            has_data = True
                             ann_lines.append(f"  - Predictions: {', '.join(pred_parts)}")
 
                         # Protein change
                         if ann.get("protein_change"):
+                            has_data = True
                             ann_lines.append(f"  - Protein change: {ann['protein_change']}")
 
-                        # Population frequency
-                        freq = ann.get("frequencies", {}).get("gnomad")
+                        # Population frequency (check multiple sources)
+                        frequencies = ann.get("frequencies", {})
+                        freq = (
+                            frequencies.get("gnomad_exome") or
+                            frequencies.get("gnomad_genome") or
+                            frequencies.get("gnomad") or
+                            frequencies.get("exac") or
+                            frequencies.get("1000genomes")
+                        )
                         if freq:
-                            ann_lines.append(f"  - Population freq (gnomAD): {freq:.4f}")
+                            has_data = True
+                            try:
+                                ann_lines.append(f"  - Population freq (gnomAD): {float(freq):.4f}")
+                            except (ValueError, TypeError):
+                                ann_lines.append(f"  - Population freq: {freq}")
+
+                        # If no clinical data found, add a note
+                        if not has_data:
+                            ann_lines.append("  - No clinical annotations available in databases")
 
                         lines.extend(ann_lines)
                         lines.append("")  # Blank line between variants
 
         elif use_biomcp and not _biomcp_available:
+            if verbose:
+                print(f"    [DEBUG] BioMCP requested but not available (biomcp-python not installed)")
             lines.append("\n*Note: BioMCP enrichment requested but biomcp-python not installed.*")
             lines.append("*Install with: pip install biomcp-python*")
 
@@ -2469,312 +1574,518 @@ Your task is to generate a comprehensive SOAP note that captures the patient's c
 Focus on clinically significant information that would help inform future care decisions.
 Be thorough but concise. Highlight patterns, risk factors, and areas requiring attention."""
 
-    SOAP_USER_PROMPT_NO_IMAGES = """Generate a SOAP note from this patient record:
 
-{patient_data}
+    # ==========================================================================
+    # UNIFIED PROMPT TEMPLATE
+    # ==========================================================================
+    # Single base template with conditional sections for images and causal graph.
+    # Use _build_chunk_prompt(), _build_aggregate_prompt(), or _build_direct_prompt().
 
-Format:
+    # Conditional section: imaging instructions (inserted into Objective)
+    _IMAGING_SECTION = """
+- **Imaging Findings**: For each attached image, describe:
+  - Modality (CT, MRI, X-ray, ultrasound)
+  - Anatomical region
+  - Key findings (normal or abnormal)
+  - Clinical significance"""
 
-# Patient Story
-1-2 paragraph narrative of health journey, focusing on key events and how they connect to current status.
+    # Conditional section: causal graph (dedicated section at end of note)
+    _CAUSAL_GRAPH_SECTION = """
 
-# Subjective
-Symptoms, complaints, relevant history.
+# Causal Graph
+DIRECT causal relationships observed in this patient, one per line.
 
-# Objective
-Vitals, labs (highlight abnormals), exam findings.
-If genetic/genomic data is present, summarize key variants and their clinical significance.
-
-# Assessment
-Active diagnoses, disease progression, risk factors, clinical reasoning.
-GENETIC INTERPRETATION: If genetic variants are present with BioMCP annotations:
-- Discuss each variant's disease associations and whether they increase or decrease risk
-- Explain how variants relate to the patient's current conditions
-- Note any protective variants that may be beneficial
-- Mention pharmacogenomic implications for drug selection/dosing if relevant
-
-## Causal Graph
-List DIRECT causal relationships, one per line:
 Format: Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms (e.g., Diabetic_Nephropathy)
-- [type] = condition, medication, procedure, lifestyle, symptom, finding, outcome, or genetic
-- ARROW = ++> (strong risk), +> (risk), ?+> (uncertain), --> (strong protection), -> (protection), => (causes)
+- Use underscores for multi-word terms (e.g., Type_2_Diabetes)
+- Types: condition, medication, procedure, lifestyle, symptom, finding, genetic
+- Arrows:
+  - ++> strongly increases risk
+  - +> increases risk
+  - --> strongly protects/reduces
+  - -> protects/reduces
+  - => directly causes
 
-Example:
-Obesity[lifestyle] ++> Diabetes[condition]
-Diabetes[condition] ++> Diabetic_Nephropathy[condition]
-Stroke[condition] => Cognitive_Impairment[condition]
-Metformin[medication] --> Blood_glucose[finding]
-
-# Plan
-Treatment, monitoring, preventive care, follow-up.
-
-# Future Considerations
-Which causal chains may progress? Interventions to interrupt harmful chains? Protective factors to reinforce?
-
-# Summary
-2-3 sentences on key findings and causal relationships."""
-
-    SOAP_USER_PROMPT_WITH_IMAGES = """Generate a SOAP note from this patient record. {num_images} image(s) attached - analyze them.
-
-{patient_data}
-
-Format:
-
-# Patient Story
-1-2 paragraph narrative of health journey.
-
-# Subjective
-Symptoms, complaints, relevant history.
-
-# Objective
-Vitals, labs (highlight abnormals), exam findings.
-Imaging Findings: Describe attached images - modality, anatomy, abnormalities, quality.
-If genetic/genomic data is present, summarize key variants and their clinical significance.
-
-# Assessment
-Diagnoses, disease progression, risk factors. Integrate imaging findings.
-GENETIC INTERPRETATION: If genetic variants are present with BioMCP/clinical annotations:
-- For EACH annotated variant, explain its disease associations and clinical impact
-- State whether variants INCREASE or DECREASE risk for specific conditions
-- Connect variants to the patient's actual diagnoses (e.g., "rs699 associated with decreased CAD risk may be protective")
-- Note any pharmacogenomic implications for current medications
-
-## Causal Graph
-List DIRECT causal relationships, one per line:
-Format: Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms (e.g., Lung_cancer)
-- [type] = condition, medication, procedure, lifestyle, symptom, finding, outcome, or genetic
-- ARROW = ++> (strong risk), +> (risk), ?+> (uncertain), --> (strong protection), -> (protection), => (causes)
-
-Example:
-Smoking[lifestyle] ++> Lung_nodule[finding]
-Lung_nodule[finding] ?+> Lung_cancer[condition]
-Lung_cancer[condition] => Biopsy[procedure]
-
-# Plan
-Treatment, monitoring, preventive care, follow-up.
-
-# Future Considerations
-Causal chains likely to progress? Interventions? Protective factors?
-
-# Summary
-2-3 sentences on key findings."""
-
-    CHUNK_SUMMARY_PROMPT = """Summarize this time period from a patient's history (2-3 paragraphs):
-
-{chunk_data}
-
-Cover: diagnoses, treatments (and their effects), health trajectory.
-Note DIRECT causal relationships using STRICT FORMAT (one per line, no explanations):
-Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms
-- [type] = condition, medication, procedure, lifestyle, symptom, finding, outcome, or genetic
+Joint/Interaction Effects (when BOTH factors required together):
+- A && B => C  means A AND B together cause C (neither alone is sufficient)
+- A || B => C  means A OR B can cause C (either alone is sufficient)
 
 Examples:
+Obesity[lifestyle] ++> Type_2_Diabetes[condition]
+Type_2_Diabetes[condition] ++> Diabetic_Nephropathy[condition]
+Type_2_Diabetes[condition] +> Cardiovascular_Disease[condition]
+Smoking[lifestyle] ++> COPD[condition]
+Smoking[lifestyle] ++> Lung_Cancer[condition]
 Hypertension[condition] ++> Stroke[condition]
-Lisinopril[medication] --> Blood_pressure[finding]
-Appendicitis[condition] => Appendectomy[procedure]"""
-
-    AGGREGATE_PROMPT_NO_IMAGES = """Synthesize SOAP note from time period summaries.
-
-Patient: {patient_name}
-
-{summaries}
-{genetics_section}
-Sections: Patient Story, Subjective, Objective, Assessment (with Causal Graph), Plan, Future Considerations, Summary.
-
-## Causal Graph
-List DIRECT causal relationships, one per line:
-Format: Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms (e.g., Diabetic_Nephropathy)
-- [type] = condition, medication, procedure, lifestyle, symptom, finding, outcome, or genetic
-- ARROW = ++> (strong risk), +> (risk), --> (strong protection), -> (protection), => (causes)
-- Include genetic risk factors in causal relationships (e.g., BRCA1_mutation[genetic] ++> Breast_cancer[condition])
-
-Example:
-Diabetes[condition] ++> Diabetic_Nephropathy[condition]
 Hypertension[condition] ++> Chronic_Kidney_Disease[condition]
-Metformin[medication] --> Blood_glucose[finding]
-APOE4_variant[genetic] ++> Alzheimers_disease[condition]"""
+Metformin[medication] --> Blood_Glucose[finding]
+Metformin[medication] -> Cardiovascular_Risk[finding]
+Statin[medication] --> LDL_Cholesterol[finding]
+ACE_Inhibitor[medication] --> Blood_Pressure[finding]
+ACE_Inhibitor[medication] --> Proteinuria[finding]
+Appendicitis[condition] => Appendectomy[procedure]
+BRCA1_Mutation[genetic] ++> Breast_Cancer[condition]
+Exercise[lifestyle] --> Insulin_Resistance[finding]
+Smoking[lifestyle] && Asbestos_Exposure[lifestyle] ++> Lung_Cancer[condition]
+Obesity[lifestyle] && Sedentary_Lifestyle[lifestyle] ++> Type_2_Diabetes[condition]
+BRCA1_Mutation[genetic] || BRCA2_Mutation[genetic] || PALB2_Mutation[genetic] ++> Breast_Cancer[condition]
+Warfarin[medication] && NSAIDs[medication] ++> GI_Bleeding[condition]
 
-    AGGREGATE_PROMPT_WITH_IMAGES = """Synthesize SOAP note from time period summaries. {num_images} image(s) attached - analyze them.
+Write relationships for THIS patient based on their actual conditions and treatments."""
 
-Patient: {patient_name}
+    # Conditional section: genetics assessment (inserted into Assessment when separate_genetics=False)
+    _GENETICS_ASSESSMENT_SECTION = """
+4. **Genetic Factors** - How the patient's genetic variants influence their health:
+   - Variants that increase risk for conditions in their history
+   - Pharmacogenomic variants affecting medication response
+   - Protective variants and their clinical implications
+   - Recommended genetic-informed interventions"""
 
-{summaries}
-{genetics_section}
-Sections: Patient Story, Subjective, Objective (with Imaging Findings), Assessment (with Causal Graph), Plan, Future Considerations, Summary.
+    def prompt(
+        self,
+        mode: str = "direct",
+        include_images: bool = False,
+        num_images: int = 1,
+        print_prompt: bool = True,
+    ) -> str:
+        """Preview the assembled prompt based on current configuration.
 
-## Causal Graph
-List DIRECT causal relationships, one per line:
-Format: Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms (e.g., Lung_cancer)
-- [type] = condition, medication, procedure, lifestyle, symptom, finding, outcome, or genetic
-- ARROW = ++> (strong risk), +> (risk), --> (strong protection), -> (protection), => (causes)
-- Include genetic risk factors in causal relationships (e.g., BRCA1_mutation[genetic] ++> Breast_cancer[condition])
+        Useful for debugging and understanding what prompt will be sent to the model.
 
-Example:
-Lung_nodule[finding] ?+> Lung_cancer[condition]
-Lung_cancer[condition] => CT_guided_biopsy[procedure]
-Bronchodilator[medication] --> Wheezing[symptom]"""
+        Args:
+            mode: Prompt type:
+                - "direct": Main SOAP note generation (single pass)
+                - "aggregate": Aggregate from time period summaries
+                - "chunk": Time period chunk summary
+                - "causal_graph": Separate causal graph generation
+                - "entity_extraction": Entity extraction for grounded mode
+                - "grounded_relationship": Relationship identification for grounded mode
+            include_images: Whether to include imaging section
+            num_images: Number of images (for display in prompt)
+            print_prompt: If True, print the prompt. If False, just return it.
 
-    # Prompts for separate_causal_graph mode (SOAP without causal graph)
-    SOAP_NO_GRAPH_PROMPT = """Generate a SOAP note from this patient record:
+        Returns:
+            The assembled prompt string
 
-{patient_data}
+        Example:
+            >>> generator = SOAPNoteGenerator(ground_snomed=True)
+            >>> generator.prompt()  # Shows direct prompt without causal graph (grounded mode)
+            >>> generator.prompt(mode="aggregate", include_images=True)
+            >>> generator.prompt(mode="grounded_relationship")  # Shows the grounded graph prompt
+        """
+        # Determine if inline causal graph should be included based on config
+        skip_inline_graph = self.separate_causal_graph or (self.ground_snomed and self.grounded_graph_mode)
+        include_causal_graph = not skip_inline_graph
 
-Format:
+        # For chunks, also check chunk_causal_graph setting
+        include_chunk_graph = False  # Default for non-chunk modes
 
-# Patient Story
-1-2 paragraph narrative of health journey, focusing on key events and how they connect to current status.
+        # Handle different prompt modes
+        if mode == "grounded_relationship":
+            # Sample concept list with SNOMED IDs for demonstration
+            sample_concepts = """Type_2_Diabetes_Mellitus[SNOMED:44054006]
+Diabetic_Nephropathy[SNOMED:236499007]
+Metformin[SNOMED:372567009]
+Hypertension[SNOMED:38341003]
+ACE_Inhibitor[SNOMED:41549009]
+Chronic_Kidney_Disease[SNOMED:709044004]
+Obesity[SNOMED:414916001]
+Elevated_HbA1c[SNOMED:444275009]"""
+            prompt = self.GROUNDED_RELATIONSHIP_PROMPT.format(
+                soap_note="[SOAP NOTE TEXT WOULD APPEAR HERE - patient's clinical history]",
+                concept_list=sample_concepts,
+            )
+
+        elif mode == "entity_extraction":
+            prompt = self.ENTITY_EXTRACTION_PROMPT.format(
+                soap_note="[SOAP NOTE TEXT WOULD APPEAR HERE]"
+            )
+
+        elif mode == "causal_graph":
+            prompt = self.CAUSAL_GRAPH_PROMPT.format(
+                soap_note="[SOAP NOTE TEXT WOULD APPEAR HERE]"
+            )
+            prompt += self._get_admission_exclusion_instruction()
+
+        elif mode == "chunk":
+            skip_chunk_graph = self.separate_causal_graph or (self.ground_snomed and self.grounded_graph_mode)
+            include_chunk_graph = self.chunk_causal_graph and not skip_chunk_graph
+            prompt = self._build_chunk_prompt(
+                chunk_data="[PATIENT DATA FOR TIME PERIOD WOULD APPEAR HERE]",
+                time_period="2020-2024",
+                include_causal_graph=include_chunk_graph,
+            )
+            if include_chunk_graph:
+                prompt += self._get_admission_exclusion_instruction()
+
+        elif mode == "aggregate":
+            prompt = self._build_aggregate_prompt(
+                patient_name="[PATIENT NAME]",
+                summaries_text="[TIME PERIOD SUMMARIES WOULD APPEAR HERE]",
+                include_images=include_images,
+                num_images=num_images,
+                include_causal_graph=include_causal_graph,
+            )
+            if include_causal_graph:
+                prompt += self._get_admission_exclusion_instruction()
+
+        else:  # direct
+            prompt = self._build_direct_prompt(
+                patient_data="[PATIENT DATA WOULD APPEAR HERE]",
+                include_images=include_images,
+                num_images=num_images,
+                include_causal_graph=include_causal_graph,
+            )
+            if include_causal_graph:
+                prompt += self._get_admission_exclusion_instruction()
+
+        # Build info header
+        mode_descriptions = {
+            "direct": "Main SOAP note generation (single pass)",
+            "aggregate": "Aggregate SOAP from time period summaries",
+            "chunk": "Time period chunk summary",
+            "causal_graph": "Separate causal graph generation (when separate_causal_graph=True)",
+            "entity_extraction": "Entity extraction (grounded mode stage 1)",
+            "grounded_relationship": "Relationship identification (grounded mode stage 2)",
+        }
+
+        info_lines = [
+            "=" * 70,
+            f"PROMPT PREVIEW: {mode}",
+            f"  {mode_descriptions.get(mode, mode)}",
+            "=" * 70,
+            f"Configuration:",
+            f"  - separate_causal_graph: {self.separate_causal_graph}",
+            f"  - ground_snomed: {self.ground_snomed}",
+            f"  - grounded_graph_mode: {self.grounded_graph_mode}",
+            f"  - chunk_causal_graph: {self.chunk_causal_graph}",
+            f"  - include_admissions: {self.include_admissions}",
+        ]
+
+        if mode in ("direct", "aggregate", "chunk"):
+            info_lines.extend([
+                f"",
+                f"Prompt includes:",
+                f"  - Imaging section: {include_images}",
+                f"  - Inline causal graph: {include_causal_graph if mode != 'chunk' else include_chunk_graph}",
+            ])
+
+        info_lines.extend(["=" * 70, ""])
+        header = "\n".join(info_lines)
+
+        if print_prompt:
+            print(header)
+            print(prompt)
+            print("\n" + "=" * 70)
+
+        return prompt
+
+    def _build_chunk_prompt(
+        self,
+        chunk_data: str,
+        time_period: str = "",
+        include_causal_graph: bool = False,
+    ) -> str:
+        """Build chunk summary prompt with same structure as final SOAP.
+
+        Args:
+            chunk_data: Patient data for this time period
+            time_period: Description of the time period (e.g., "2018-2020")
+            include_causal_graph: Whether to include causal graph (default False for chunks)
+        """
+        causal_section = self._CAUSAL_GRAPH_SECTION if include_causal_graph else ""
+        period_label = f" ({time_period})" if time_period else ""
+
+        return f"""Summarize this time period{period_label} from a patient's medical history.
+
+=== PATIENT DATA FOR THIS TIME PERIOD ===
+{chunk_data}
+=== END OF TIME PERIOD DATA ===
+
+Generate a focused summary using the markdown format below.
 
 # Subjective
-Symptoms, complaints, relevant history.
+Patient-reported symptoms and complaints during this period.
 
 # Objective
-Vitals, labs (highlight abnormals), exam findings.
-If genetic/genomic data is present, summarize key variants and their clinical significance.
+Clinical findings:
+- Vital signs and trends
+- Laboratory results (highlight abnormal values)
+- Procedures performed
 
 # Assessment
-Active diagnoses, disease progression, risk factors, clinical reasoning.
-GENETIC INTERPRETATION: If genetic variants are present with BioMCP/clinical annotations:
-- For EACH annotated variant, explain its disease associations and clinical impact
-- State whether variants INCREASE or DECREASE risk for specific conditions
-- Connect variants to the patient's actual diagnoses
-- Note any pharmacogenomic implications for current medications
-(Causal graph will be generated separately)
+Clinical reasoning:
+1. **Diagnoses** - Conditions identified or managed
+2. **Disease progression** - How conditions evolved
+3. **Risk factors** - New or ongoing concerns
 
 # Plan
-Treatment, monitoring, preventive care, follow-up.
-Consider genetic factors when recommending screening or preventive measures.
-
-# Future Considerations
-Which conditions may progress? Interventions needed? Protective factors to reinforce?
-Include genetic predispositions in risk assessment.
+Treatment during this period:
+1. Medications started/changed
+2. Monitoring performed
+3. Referrals made
 
 # Summary
-2-3 sentences on key findings."""
+2-3 sentences on key events and health trajectory during this period.{causal_section}"""
 
-    SOAP_NO_GRAPH_WITH_IMAGES_PROMPT = """Generate a SOAP note from this patient record. {num_images} image(s) attached - analyze them.
+    def _build_aggregate_prompt(
+        self,
+        patient_name: str,
+        summaries_text: str,
+        include_images: bool = False,
+        num_images: int = 0,
+        include_causal_graph: bool = True,
+    ) -> str:
+        """Build aggregate prompt with conditional sections."""
+        image_note = f" {num_images} medical image(s) attached - analyze them." if include_images else ""
+        imaging_section = self._IMAGING_SECTION if include_images else ""
+        causal_section = self._CAUSAL_GRAPH_SECTION if include_causal_graph else ""
+        # Include genetics in assessment when genomics are inline (separate_genetics=False)
+        genetics_section = self._GENETICS_ASSESSMENT_SECTION if (self.use_biomcp and not self.separate_genetics) else ""
 
-{patient_data}
+        return f"""You are synthesizing a SOAP note from multiple time period summaries.{image_note}
 
-Format:
+=== PATIENT ===
+{patient_name}
+
+=== TIME PERIOD SUMMARIES ===
+{summaries_text}
+
+=== END OF INPUT DATA ===
+
+Generate a comprehensive SOAP note using the exact markdown format below.
 
 # Patient Story
-1-2 paragraph narrative of health journey.
+1-2 paragraph narrative synthesizing the patient's health journey across all time periods.
 
 # Subjective
-Symptoms, complaints, relevant history.
+Consolidated patient-reported symptoms and history across time periods.
 
 # Objective
-Vitals, labs (highlight abnormals), exam findings.
-Imaging Findings: Describe attached images - modality, anatomy, abnormalities, quality.
-If genetic/genomic data is present, summarize key variants and their clinical significance.
+Synthesized clinical findings:
+- Most recent vital signs with trends over time
+- Key laboratory values and changes{imaging_section}
 
 # Assessment
-Diagnoses, disease progression, risk factors. Integrate imaging findings.
-GENETIC INTERPRETATION: If genetic variants are present with BioMCP/clinical annotations:
-- For EACH annotated variant, explain its disease associations and clinical impact
-- State whether variants INCREASE or DECREASE risk for specific conditions
-- Connect variants to the patient's actual diagnoses (e.g., "rs699 associated with decreased CAD risk")
-- Note any pharmacogenomic implications for current medications
-(Causal graph will be generated separately)
+Integrated clinical reasoning:
+1. **Active Problem List** - Current diagnoses by clinical priority
+2. **Disease Trajectories** - How conditions have progressed
+3. **Risk Stratification** - Risk factors and prognosis{genetics_section}
 
 # Plan
-Treatment, monitoring, preventive care, follow-up.
-Consider genetic factors when recommending screening or preventive measures.
+Treatment strategy:
+1. Medications - current regimen and changes
+2. Monitoring - labs, imaging needed
+3. Lifestyle interventions
+4. Referrals
+5. Follow-up schedule
 
 # Future Considerations
-Which conditions may progress? Interventions needed?
-Include genetic predispositions in risk assessment.
+Conditions likely to progress, preventive interventions, screening needs.
 
 # Summary
-2-3 sentences on key findings."""
+2-3 sentences on critical findings and priorities.{causal_section}"""
+
+    def _build_direct_prompt(
+        self,
+        patient_data: str,
+        include_images: bool = False,
+        num_images: int = 0,
+        include_causal_graph: bool = True,
+    ) -> str:
+        """Build direct (non-hierarchical) prompt with conditional sections."""
+        image_note = f" {num_images} medical image(s) attached - analyze them." if include_images else ""
+        imaging_section = self._IMAGING_SECTION if include_images else ""
+        causal_section = self._CAUSAL_GRAPH_SECTION if include_causal_graph else ""
+        # Include genetics in assessment when genomics are inline (separate_genetics=False)
+        genetics_section = self._GENETICS_ASSESSMENT_SECTION if (self.use_biomcp and not self.separate_genetics) else ""
+
+        return f"""Generate a SOAP note from this patient record.{image_note}
+
+=== PATIENT DATA ===
+{patient_data}
+
+=== END OF INPUT DATA ===
+
+Generate a SOAP note using the exact markdown format below.
+
+# Patient Story
+1-2 paragraph narrative of the patient's health journey chronologically.
+
+# Subjective
+Patient-reported symptoms, complaints, and relevant history:
+- Chief complaints
+- History of present illness
+- Social/family history
+
+# Objective
+Clinical findings:
+- Vital signs (BP, HR, temp, weight, BMI)
+- Physical exam findings
+- Laboratory results (highlight abnormal values){imaging_section}
+
+# Assessment
+Clinical reasoning:
+1. **Primary diagnoses** - Active conditions
+2. **Disease progression** - How conditions evolved
+3. **Risk factors** - Modifiable and non-modifiable{genetics_section}
+
+# Plan
+Treatment and follow-up:
+1. Medications
+2. Monitoring (labs, imaging)
+3. Lifestyle modifications
+4. Referrals
+5. Follow-up timing
+
+# Future Considerations
+Conditions to monitor, preventive interventions, screening needs.
+
+# Summary
+2-3 sentences on critical findings and recommendations.{causal_section}"""
 
     CAUSAL_GRAPH_PROMPT = """Based on this SOAP note, generate a causal graph showing medical relationships.
 
-SOAP Note:
+=== SOAP NOTE ===
 {soap_note}
+=== END OF SOAP NOTE ===
 
-Generate DIRECT causal relationships, one per line.
+Generate DIRECT causal relationships observed in this patient, one per line.
+
 Format: Cause[type] ARROW Effect[type]
-- Use underscores for multi-word terms (e.g., Diabetic_Nephropathy)
-- [type] = condition, medication, procedure, lifestyle, symptom, finding, outcome, or genetic
-- ARROW = ++> (strong risk), +> (risk), ?+> (uncertain), --> (strong protection), -> (protection), => (causes)
+- Use underscores for multi-word terms (e.g., Type_2_Diabetes)
+- Types: condition, medication, procedure, lifestyle, symptom, finding, genetic
+- Arrows:
+  - ++> strongly increases risk
+  - +> increases risk
+  - --> strongly protects/reduces
+  - -> protects/reduces
+  - => directly causes
 
-Example:
-Diabetes[condition] ++> Diabetic_Nephropathy[condition]
-Stroke[condition] => Cognitive_Impairment[condition]
-Hypertension[condition] ++> Cardiovascular_Disease[condition]
-Metformin[medication] --> Blood_glucose[finding]
-
-Output the relationships now:"""
-
-    # Two-stage grounded causal graph prompts
-    ENTITY_EXTRACTION_PROMPT = """Extract all medical entities from this clinical note.
-
-SOAP Note:
-{soap_note}
-
-List each unique medical entity (conditions, medications, procedures, symptoms, findings, lifestyle factors).
-Output one entity per line, using standard medical terminology.
-Be specific and use proper clinical terms (e.g., "Type 2 diabetes mellitus" not "diabetes").
-
-Format: entity_name | type
-Types: condition, medication, procedure, symptom, finding, lifestyle, genetic
-
-Example output:
-Type 2 diabetes mellitus | condition
-Metformin | medication
-Hypertension | condition
-Chronic kidney disease | condition
-Elevated creatinine | finding
-Smoking | lifestyle
-
-Extract entities now:"""
-
-    GROUNDED_RELATIONSHIP_PROMPT = """Identify causal relationships between these medical concepts.
-
-Available concepts:
-{concept_list}
-
-Based on medical knowledge, identify direct causal relationships between these concepts.
-Use the LABEL (the short identifier before the equals sign) for each concept.
-
-Format: LABEL ARROW LABEL
-- ARROW types: ++> (strong risk), +> (risk), --> (strong protection), -> (protection), => (causes)
+Joint/Interaction Effects (when BOTH factors required together):
+- A && B => C  means A AND B together cause C (neither alone is sufficient)
+- A || B => C  means A OR B can cause C (either alone is sufficient)
 
 Examples:
-C1 ++> C2
-C3 => C4
-C5 -> C6
+Obesity[lifestyle] ++> Type_2_Diabetes[condition]
+Type_2_Diabetes[condition] ++> Diabetic_Nephropathy[condition]
+Type_2_Diabetes[condition] +> Cardiovascular_Disease[condition]
+Smoking[lifestyle] ++> COPD[condition]
+Hypertension[condition] ++> Stroke[condition]
+Hypertension[condition] ++> Chronic_Kidney_Disease[condition]
+Metformin[medication] --> Blood_Glucose[finding]
+Statin[medication] --> LDL_Cholesterol[finding]
+ACE_Inhibitor[medication] --> Blood_Pressure[finding]
+Appendicitis[condition] => Appendectomy[procedure]
+BRCA1_Mutation[genetic] ++> Breast_Cancer[condition]
+Exercise[lifestyle] --> Insulin_Resistance[finding]
+Smoking[lifestyle] && Asbestos_Exposure[lifestyle] ++> Lung_Cancer[condition]
+Obesity[lifestyle] && Sedentary_Lifestyle[lifestyle] ++> Type_2_Diabetes[condition]
+BRCA1_Mutation[genetic] || BRCA2_Mutation[genetic] || PALB2_Mutation[genetic] ++> Breast_Cancer[condition]
+Warfarin[medication] && NSAIDs[medication] ++> GI_Bleeding[condition]
 
-List all valid medical relationships (one per line, using only LABELs from the list above):"""
+Write relationships for THIS patient based on their actual conditions and treatments:"""
 
-    # Aggregate prompts without causal graph (for separate_causal_graph mode)
-    AGGREGATE_NO_GRAPH_PROMPT = """Synthesize SOAP note from time period summaries.
+    # Two-stage grounded causal graph prompts
+    ENTITY_EXTRACTION_PROMPT = """Extract medical entities from this SOAP note for SNOMED grounding.
 
-Patient: {patient_name}
+=== SOAP NOTE ===
+{soap_note}
+=== END OF SOAP NOTE ===
 
-{summaries}
-{genetics_section}
-Sections: Patient Story, Subjective, Objective, Assessment, Plan, Future Considerations, Summary.
-(Causal graph will be generated separately)
+RULES:
+1. Extract each unique medical entity ONLY ONCE (no duplicates)
+2. Use standard medical terminology (will be matched to SNOMED CT)
+3. Include: conditions, medications, procedures, symptoms, findings, lifestyle factors, genetic factors
+4. Do NOT extract: patient names, dates, provider names, locations, or non-medical text
+5. If the SOAP note has no medical content, output "NO_ENTITIES"
 
-Focus on synthesizing the key clinical findings across all time periods. Integrate relevant genetic findings into the assessment and plan."""
+OUTPUT FORMAT:
+- Plain text, one entity per line
+- NO JSON, NO markdown, NO formatting
+- NO explanations, NO prose, ONLY the entity list
 
-    AGGREGATE_NO_GRAPH_WITH_IMAGES_PROMPT = """Synthesize SOAP note from time period summaries. {num_images} image(s) attached - analyze them.
+EXAMPLE OUTPUT:
+Type 2 diabetes mellitus
+Hypertension
+Chronic kidney disease
+Diabetic nephropathy
+Metformin
+Lisinopril
+Atorvastatin
+Colonoscopy
+Coronary angiography
+Chest pain
+Shortness of breath
+Fatigue
+Elevated HbA1c
+Proteinuria
+Left ventricular hypertrophy
+Obesity
+Smoking
+Sedentary lifestyle
+BRCA1 mutation
+Factor V Leiden
+APOE e4 allele
 
-Patient: {patient_name}
+Extract entities (no duplicates):"""
 
-{summaries}
-{genetics_section}
-Sections: Patient Story, Subjective, Objective (with Imaging Findings), Assessment, Plan, Future Considerations, Summary.
-(Causal graph will be generated separately)
+    GROUNDED_RELATIONSHIP_PROMPT = """You are analyzing a patient's clinical history to identify causal relationships.
 
-Focus on synthesizing the key clinical findings and integrating imaging results. Integrate relevant genetic findings into the assessment and plan."""
+=== PATIENT CLINICAL SUMMARY ===
+{soap_note}
+=== END SUMMARY ===
+
+=== MEDICAL CONCEPTS (grounded to SNOMED CT) ===
+{concept_list}
+=== END CONCEPTS ===
+
+Based on THIS PATIENT'S history above, identify causal relationships between the concepts.
+Only include relationships that are relevant to this specific patient's condition progression.
+
+OUTPUT FORMAT (one relationship per line):
+Source[SNOMED:ID] ARROW Target[SNOMED:ID]
+
+ARROWS:
+- ++> strongly increases risk (e.g., uncontrolled diabetes ++> kidney disease)
+- +> increases risk (e.g., age +> dementia)
+- --> protects against / treats (e.g., metformin --> diabetes)
+- => directly causes (e.g., trauma => fracture)
+
+INTERACTIONS (optional):
+- A && B => C means both A and B together cause C
+- A || B => C means either A or B can cause C
+
+=== EXAMPLES ===
+Diabetes_mellitus[SNOMED:73211009] ++> Chronic_kidney_disease[SNOMED:709044004]
+Hypertension[SNOMED:38341003] ++> Stroke[SNOMED:230690007]
+Metformin[SNOMED:372567009] --> Diabetes_mellitus[SNOMED:73211009]
+Smoking[SNOMED:77176002] && Hypertension[SNOMED:38341003] ++> Coronary_artery_disease[SNOMED:53741008]
+=== END EXAMPLES ===
+
+Output ONLY relationship lines for THIS patient. No explanations or commentary.
+
+Relationships:"""
+
+    # Genetic interpretation prompt (separate agent to avoid output truncation)
+    GENETIC_SUMMARY_PROMPT = """You are a clinical geneticist interpreting genetic test results for a patient.
+
+PATIENT CONTEXT (from SOAP note):
+{soap_summary}
+
+GENETIC VARIANTS AND ANNOTATIONS:
+{genetic_annotations}
+
+YOUR TASK: Write a clinical genetic interpretation that:
+
+1. **Risk Assessment**: For each clinically significant variant, explain what it means for THIS patient given their medical history
+2. **Disease Connections**: Connect genetic findings to the patient's existing conditions (e.g., "The rs699 variant in AGT, associated with decreased CAD risk, is relevant given the patient's hypertension history")
+3. **Pharmacogenomics**: Note any drug-gene interactions relevant to current or potential medications
+4. **Actionable Recommendations**: Suggest genetic counseling, additional testing, or lifestyle modifications based on findings
+5. **Risk Modifiers**: Explain how genetic risk factors interact with environmental/lifestyle factors already documented
+
+Write in clinical prose suitable for a physician. Be specific about risk directions (increased vs decreased) and confidence levels.
+
+GENETIC INTERPRETATION:"""
 
     def __init__(
         self,
@@ -2786,7 +2097,7 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
         chunk_period_years: Optional[int | str] = "auto",
         max_new_tokens_chunk: int = 8192,
         max_new_tokens_final: int = 8192,
-        verbose: bool = True,
+        verbose: Union[bool, int] = True,
         approximate_tokens: bool = False,
         multi_gpu: bool = False,
         gpu_memory_fraction: Optional[float] = None,
@@ -2794,11 +2105,19 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
         include_imaging: bool = True,
         max_images: int = 3,
         use_biomcp: bool = False,
+        separate_genetics: bool = False,
         separate_causal_graph: bool = False,
+        chunk_causal_graph: bool = False,
         include_admissions: bool = False,
         ground_snomed: bool = False,
         snomed_embedding_model: Optional[str] = None,
+        snomed_index_name: Optional[str] = None,
         grounded_graph_mode: bool = True,
+        entity_extraction_model: Optional[str] = None,
+        do_sample: Optional[bool] = None,
+        repetition_penalty: Optional[float] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
     ):
         """
         Initialize the SOAP note generator.
@@ -2836,10 +2155,18 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
                         clinical significance, associated conditions, and functional
                         predictions. Requires: pip install biomcp-python
                         See: https://biomcp.org/
+            separate_genetics: If True, generate genetic summary in a separate LLM
+                        call after the SOAP note (avoids truncation for long outputs).
+                        If False (default), include BioMCP annotations directly in
+                        the input to the SOAP generator, resulting in integrated
+                        genetic interpretation within the SOAP note itself.
             separate_causal_graph: If True, generate the causal graph in a separate
                         prompt after the main SOAP note. This avoids hitting token
-                        generation limits. The causal graph is only generated for
-                        the final SOAP note, not for chunk summaries. (default: False)
+                        generation limits. (default: False)
+            chunk_causal_graph: If True, include causal graph generation in chunk
+                        summaries (for hierarchical mode). By default (False), only
+                        the final aggregated SOAP note includes a causal graph.
+                        Enable this for detailed per-period causal analysis.
             include_admissions: If True, include Hospital Admissions in the causal
                         graph. If False (default), admissions are excluded from
                         the causal graph to focus on condition-to-condition and
@@ -2852,12 +2179,125 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
                         - "qwen3-0.6b": Efficient Qwen3 embeddings
                         - See synthlab.snomed.EMBEDDING_MODELS for full list
                         Only used if ground_snomed=True.
+            snomed_index_name: Name of pre-built SNOMED index to use. If set, loads
+                        from cache (built with sl.build_snomed_index()). If None,
+                        falls back to sample concepts (~300 terms). For full SNOMED
+                        (350k concepts), first run:
+                            sl.build_snomed_index("/path/to/CONCEPT.csv", index_name="snomed_full")
+                        Then set snomed_index_name="snomed_full".
             grounded_graph_mode: If True (default when ground_snomed=True), use a
                         two-stage approach: first extract and ground entities to SNOMED,
                         then identify relationships between grounded concepts. This ensures
                         100% grounding by construction. If False, generates free-form
                         causal graph then attempts retrospective SNOMED mapping.
+            entity_extraction_model: Model for extracting medical entities from SOAP notes.
+                        If None (default), uses the main MedGemma model (local).
+                        If specified, uses MedicalEntityExtractor with an external LLM API:
+                        - "gemini-2.0-flash" (recommended, fast and accurate)
+                        - "gpt-4o-mini", "gpt-4o" (OpenAI)
+                        - "claude-3-haiku-20240307" (Anthropic)
+                        Requires appropriate API key in environment (GOOGLE_API_KEY,
+                        OPENAI_API_KEY, or ANTHROPIC_API_KEY).
+            do_sample: If True, use sampling for text generation with temperature
+                        and top_p. If False, use greedy decoding. If None (default), use
+                        model's default (greedy for MedGemma).
+            repetition_penalty: Penalty for repeating tokens. Values > 1.0 discourage
+                        repetition. If None (default), use model's default.
+            temperature: Sampling temperature. Higher = more creative/random, lower = more
+                        focused/deterministic. Only used when do_sample=True. If None, use
+                        model's default.
+            top_p: Nucleus sampling threshold. Only consider tokens with cumulative
+                        probability >= top_p. Only used when do_sample=True. If None, use
+                        model's default.
         """
+        # Load .env file if present (for API keys like GOOGLE_API_KEY)
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+        except ImportError:
+            pass  # dotenv not installed, skip
+
+        # Validate and normalize entity extraction model (fail fast)
+        if entity_extraction_model:
+            # Check if it's the same as the main model or a MedGemma variant -> use local
+            is_local_model = (
+                entity_extraction_model == model_id
+                or "medgemma" in entity_extraction_model.lower()
+            )
+            if is_local_model:
+                entity_extraction_model = None  # Use local model
+
+        # Validate external API models
+        if entity_extraction_model:
+            model_lower = entity_extraction_model.lower()
+
+            # Normalize model name for litellm (google/gemini-* -> gemini/gemini-*)
+            if entity_extraction_model.startswith("google/gemini"):
+                entity_extraction_model = entity_extraction_model.replace("google/", "gemini/")
+
+            # Validate API key
+            if "gemini" in model_lower and not os.environ.get("GOOGLE_API_KEY"):
+                raise ValueError(
+                    f"entity_extraction_model='{entity_extraction_model}' requires GOOGLE_API_KEY.\n"
+                    "Set it via:\n"
+                    "  1. Environment variable: export GOOGLE_API_KEY='your-key'\n"
+                    "  2. .env file in project root: GOOGLE_API_KEY=your-key\n"
+                    "Get a key at: https://aistudio.google.com/apikey"
+                )
+            elif "gpt" in model_lower and not os.environ.get("OPENAI_API_KEY"):
+                raise ValueError(
+                    f"entity_extraction_model='{entity_extraction_model}' requires OPENAI_API_KEY.\n"
+                    "Set it via:\n"
+                    "  1. Environment variable: export OPENAI_API_KEY='your-key'\n"
+                    "  2. .env file in project root: OPENAI_API_KEY=your-key"
+                )
+            elif "claude" in model_lower and not os.environ.get("ANTHROPIC_API_KEY"):
+                raise ValueError(
+                    f"entity_extraction_model='{entity_extraction_model}' requires ANTHROPIC_API_KEY.\n"
+                    "Set it via:\n"
+                    "  1. Environment variable: export ANTHROPIC_API_KEY='your-key'\n"
+                    "  2. .env file in project root: ANTHROPIC_API_KEY=your-key"
+                )
+
+            # Validate LLM client is available and model is recognized
+            _has_litellm = False
+            try:
+                import litellm
+                _has_litellm = True
+
+                # Validate model name using litellm's model registry
+                try:
+                    litellm.get_model_info(entity_extraction_model)
+                except Exception:
+                    # Model not in litellm's registry - provide helpful error
+                    raise ValueError(
+                        f"Model '{entity_extraction_model}' not found in litellm's model registry.\n"
+                        "Check available models at: https://docs.litellm.ai/docs/providers\n"
+                        "Common models:\n"
+                        "  - gemini/gemini-2.0-flash, gemini/gemini-1.5-pro\n"
+                        "  - gpt-4o-mini, gpt-4o\n"
+                        "  - claude-3-haiku-20240307, claude-3-5-sonnet-20241022"
+                    )
+            except ImportError:
+                pass
+
+            # Fallback to google.generativeai for Gemini if litellm not available
+            if not _has_litellm and "gemini" in model_lower:
+                try:
+                    import google.generativeai  # noqa: F401
+                except ImportError:
+                    raise ImportError(
+                        f"entity_extraction_model='{entity_extraction_model}' requires an LLM client.\n"
+                        "Install one of:\n"
+                        "  pip install litellm            # Recommended: unified API for all models\n"
+                        "  pip install google-generativeai  # For Gemini models only"
+                    )
+            elif not _has_litellm:
+                raise ImportError(
+                    f"entity_extraction_model='{entity_extraction_model}' requires litellm.\n"
+                    "Install with: pip install litellm"
+                )
+
         self.model_id = model_id
         self.device = device
         self.torch_dtype = torch_dtype
@@ -2885,11 +2325,19 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
         self.include_imaging = include_imaging
         self.max_images = max_images
         self.use_biomcp = use_biomcp
+        self.separate_genetics = separate_genetics
         self.separate_causal_graph = separate_causal_graph
+        self.chunk_causal_graph = chunk_causal_graph
         self.include_admissions = include_admissions
         self.ground_snomed = ground_snomed
         self.snomed_embedding_model = snomed_embedding_model
+        self.snomed_index_name = snomed_index_name
         self.grounded_graph_mode = grounded_graph_mode
+        self.entity_extraction_model = entity_extraction_model
+        self.do_sample = do_sample
+        self.repetition_penalty = repetition_penalty
+        self.temperature = temperature
+        self.top_p = top_p
 
         # Validate SNOMED grounding dependencies early (fail fast)
         if self.ground_snomed:
@@ -2901,6 +2349,7 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
         self._tokenizer = None
         self._optimal_batch_size = None  # Cached after first calculation
         self._snomed_linker = None  # Lazy-loaded SNOMEDLinker for grounding
+        self._entity_extractor = None  # Lazy-loaded MedicalEntityExtractor
 
         # Print configuration summary
         if self.verbose:
@@ -2932,6 +2381,19 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
         print(f"  Generation limits:")
         print(f"    max_new_tokens_chunk: {self.max_new_tokens_chunk:,}")
         print(f"    max_new_tokens_final: {self.max_new_tokens_final:,}")
+        sampling_parts = []
+        if self.do_sample is not None:
+            sampling_parts.append(f"do_sample={self.do_sample}")
+        if self.repetition_penalty is not None:
+            sampling_parts.append(f"repetition_penalty={self.repetition_penalty}")
+        if self.do_sample and self.temperature is not None:
+            sampling_parts.append(f"temperature={self.temperature}")
+        if self.do_sample and self.top_p is not None:
+            sampling_parts.append(f"top_p={self.top_p}")
+        if sampling_parts:
+            print(f"  Sampling: {', '.join(sampling_parts)}")
+        else:
+            print("  Sampling: using model defaults")
         if self.use_biomcp:
             print("  BioMCP: enabled")
         if self.separate_causal_graph:
@@ -2944,6 +2406,8 @@ Focus on synthesizing the key clinical findings and integrating imaging results.
             model_name = self.snomed_embedding_model or "sapbert"
             mode = "two-stage" if self.grounded_graph_mode else "retrospective"
             print(f"  SNOMED grounding: enabled ({model_name}, {mode} mode)")
+        if self.entity_extraction_model:
+            print(f"  Entity extraction: {self.entity_extraction_model}")
 
     def _validate_snomed_dependencies(self):
         """Validate that SNOMED grounding dependencies are available.
@@ -3169,16 +2633,21 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             device_map = {"": 0} if torch.cuda.is_available() else "auto"
 
         try:
-            # Load processor with fast image processor
-            processor = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
-
+            # Match MedGemma docs: https://huggingface.co/google/medgemma-1.5-4b-it
+            # Note: torch_dtype is deprecated in newer transformers, use dtype
             pipeline_kwargs = {
                 "task": "image-text-to-text",
                 "model": self.model_id,
                 "dtype": dtype,
-                "use_fast": True,
-                "processor": processor,
+                "use_fast": True,  # Use fast tokenizer and processor
             }
+
+            # Try to load processor with use_fast=True to avoid deprecation warning
+            try:
+                processor = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
+                pipeline_kwargs["processor"] = processor
+            except Exception:
+                pass  # Fall back to pipeline's default processor loading
 
             # Add device configuration
             if device_map:
@@ -3218,6 +2687,25 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
             # Get tokenizer for token counting
             self._tokenizer = self._pipe.tokenizer
+
+            # Configure generation settings if provided (otherwise use model defaults)
+            if self._pipe.model is not None and hasattr(self._pipe.model, 'generation_config'):
+                gen_config = self._pipe.model.generation_config
+                config_msgs = []
+                if self.do_sample is not None:
+                    gen_config.do_sample = self.do_sample
+                    config_msgs.append(f"do_sample={self.do_sample}")
+                if self.repetition_penalty is not None:
+                    gen_config.repetition_penalty = self.repetition_penalty
+                    config_msgs.append(f"repetition_penalty={self.repetition_penalty}")
+                if self.do_sample and self.temperature is not None:
+                    gen_config.temperature = self.temperature
+                    config_msgs.append(f"temperature={self.temperature}")
+                if self.do_sample and self.top_p is not None:
+                    gen_config.top_p = self.top_p
+                    config_msgs.append(f"top_p={self.top_p}")
+                if self.verbose and config_msgs:
+                    print(f"  Generation config: {', '.join(config_msgs)}")
 
             if self.verbose:
                 # Get device info
@@ -3359,50 +2847,197 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             return 2
 
     def _clean_response(self, text: str) -> str:
-        """Remove thinking tokens and other artifacts from model output."""
+        """Remove thinking tokens, artifacts, and repetitions from model output."""
         import re
 
-        # Remove thinking blocks (e.g., <unused94>thought ... </unused94>)
-        text = re.sub(r'<unused\d+>thought.*?(?:</unused\d+>|$)', '', text, flags=re.DOTALL)
-        # Remove any remaining <unusedXX> tokens
-        text = re.sub(r'<unused\d+>', '', text)
-        # Remove <thinking> blocks if present
+        # Remove thinking blocks with proper closing tags (e.g., <unused94>thought ... </unused94>)
+        text = re.sub(r'<unused\d+>thought.*?</unused\d+>', '', text, flags=re.DOTALL)
+
+        # Remove <thinking> blocks with proper closing tags
         text = re.sub(r'<thinking>.*?</thinking>', '', text, flags=re.DOTALL)
 
+        # If response still starts with thinking token without closing tag,
+        # try to find where actual content begins (look for section headers)
+        if text.strip().startswith('<unused') and 'thought' in text[:50].lower():
+            # Look for common section markers that indicate start of actual content
+            section_markers = [
+                r'\n#\s',           # Markdown header
+                r'\n\*\*[A-Z]',    # Bold header
+                r'\nSUBJECTIVE',   # SOAP sections
+                r'\nOBJECTIVE',
+                r'\nASSESSMENT',
+                r'\nPLAN',
+                r'\nPATIENT STORY',
+            ]
+            for marker in section_markers:
+                match = re.search(marker, text, re.IGNORECASE)
+                if match:
+                    # Found actual content - extract from this point
+                    text = text[match.start():]
+                    break
+            else:
+                # No section markers found - the entire response may be thinking
+                # Just remove the thinking prefix and see what's left
+                text = re.sub(r'^<unused\d+>thought\s*', '', text)
+
+        # Remove any remaining standalone <unusedXX> tokens
+        text = re.sub(r'</?unused\d+>', '', text)
+
+        # Detect and remove repetition loops
+        text = self._remove_repetition_loops(text)
+
         return text.strip()
+
+    def _remove_repetition_loops(self, text: str) -> str:
+        """Detect and truncate repetition loops in model output.
+
+        When models get stuck in repetition loops, they often repeat
+        the same phrase many times. This detects such patterns and
+        truncates to just the first occurrence.
+        """
+        import re
+
+        # Split into lines
+        lines = text.split('\n')
+
+        # Detect repeated lines (same line appearing 3+ times consecutively)
+        cleaned_lines = []
+        prev_line = None
+        repeat_count = 0
+        max_repeats = 2  # Allow at most 2 identical consecutive lines
+
+        for line in lines:
+            line_stripped = line.strip()
+            if line_stripped == prev_line and line_stripped:
+                repeat_count += 1
+                if repeat_count < max_repeats:
+                    cleaned_lines.append(line)
+            else:
+                cleaned_lines.append(line)
+                repeat_count = 0
+                prev_line = line_stripped
+
+        text = '\n'.join(cleaned_lines)
+
+        # Detect repeated phrases within content (20+ chars appearing 5+ times)
+        # This catches "Patient reports no recent falls. Patient reports no recent falls."
+        phrase_pattern = r'(.{20,}?)\1{4,}'
+        match = re.search(phrase_pattern, text)
+        if match:
+            # Found a repeated phrase - keep only the first occurrence
+            repeated_phrase = match.group(1)
+            # Replace multiple occurrences with single
+            text = re.sub(re.escape(repeated_phrase) + r'(' + re.escape(repeated_phrase) + r')+',
+                         repeated_phrase, text)
+
+        return text
 
     def _generate_text(
         self,
         prompt: str,
         images: Optional[list] = None,
         max_new_tokens: Optional[int] = None,
+        system_prompt: Optional[str] = None,
     ) -> str:
-        """Generate text using the model."""
+        """Generate text using the model.
+
+        Args:
+            prompt: The user prompt
+            images: Optional list of images for multimodal input
+            max_new_tokens: Max tokens to generate
+            system_prompt: Optional system prompt for structured output tasks
+        """
         self._load_model()
 
-        # Build message content
-        content = []
+        # Build messages list
+        messages = []
 
+        # Add system prompt if provided (helps with structured output)
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+
+        # Build user message content - always use list format for MedGemma
+        content = []
         if images:
             for img in images:
                 content.append({"type": "image", "image": img})
-
         content.append({"type": "text", "text": prompt})
+        messages.append({"role": "user", "content": content})
 
-        messages = [{"role": "user", "content": content}]
-
-        # Build generate kwargs
-        generate_kwargs = {
-            "repetition_penalty": 1.2,  # Discourage repetition
-        }
-        if max_new_tokens is not None:
-            generate_kwargs["max_new_tokens"] = max_new_tokens
+        # Build generate kwargs - only include non-None values to let model use defaults
+        generate_kwargs = {}
+        if self.do_sample is not None:
+            generate_kwargs["do_sample"] = self.do_sample
+        if self.repetition_penalty is not None:
+            generate_kwargs["repetition_penalty"] = self.repetition_penalty
+        if self.do_sample and self.temperature is not None:
+            generate_kwargs["temperature"] = self.temperature
+        if self.do_sample and self.top_p is not None:
+            generate_kwargs["top_p"] = self.top_p
+        # Always set max_new_tokens - use default if not specified
+        generate_kwargs["max_new_tokens"] = max_new_tokens if max_new_tokens is not None else self.max_new_tokens_final
 
         try:
+            if self.verbose:
+                print(f"    [DEBUG] Pipeline input messages: {repr(messages)[:500]}")
+                print(f"    [DEBUG] Generate kwargs: {generate_kwargs}")
+
             output = self._pipe(text=messages, **generate_kwargs)
-            response = output[0]["generated_text"][-1]["content"]
+
+            if self.verbose:
+                print(f"    [DEBUG] Pipeline output type: {type(output)}")
+                print(f"    [DEBUG] Pipeline output: {repr(output)[:1000]}")
+
+            # image-text-to-text pipeline returns: [{"generated_text": [...messages...]}]
+            # Extract response via: output[0]["generated_text"][-1]["content"]
+            # See: https://huggingface.co/google/medgemma-1.5-4b-it
+            if not isinstance(output, list) or len(output) == 0:
+                raise RuntimeError(f"Unexpected output type: {type(output)}, expected list")
+
+            item = output[0]
+            if not isinstance(item, dict) or "generated_text" not in item:
+                raise RuntimeError(f"Unexpected output format. Keys: {item.keys() if isinstance(item, dict) else 'N/A'}")
+
+            gen_text = item["generated_text"]
+
+            # Per MedGemma docs: output[0]["generated_text"][-1]["content"]
+            # generated_text is a list of messages, last one is assistant's response
+            if not isinstance(gen_text, list) or len(gen_text) == 0:
+                raise RuntimeError(f"Expected generated_text to be non-empty list, got: {type(gen_text)}")
+
+            last_msg = gen_text[-1]
+
+            if self.verbose:
+                print(f"    [DEBUG] generated_text has {len(gen_text)} messages")
+                print(f"    [DEBUG] last_msg type: {type(last_msg)}")
+                print(f"    [DEBUG] last_msg: {repr(last_msg)[:500]}")
+
+            # Extract content from last message
+            if isinstance(last_msg, dict) and "content" in last_msg:
+                response = last_msg["content"]
+                # Content should be a string per MedGemma docs
+                if not isinstance(response, str):
+                    raise RuntimeError(f"Expected content to be string, got {type(response)}: {repr(response)[:200]}")
+            elif isinstance(last_msg, str):
+                # Fallback: last_msg is directly the response string
+                response = last_msg
+            else:
+                raise RuntimeError(f"Cannot extract content from last message: {repr(last_msg)[:500]}")
+
+            # Fail if response is empty
+            if not response or not response.strip():
+                raise RuntimeError(
+                    f"Model generated empty output.\n"
+                    f"  max_new_tokens: {generate_kwargs.get('max_new_tokens')}\n"
+                    f"  generated_text: {repr(gen_text)[:200]}"
+                )
+
             return self._clean_response(response)
         except Exception as e:
+            if self.verbose:
+                print(f"    [DEBUG] Generation exception: {e}")
+                import traceback
+                traceback.print_exc()
             raise RuntimeError(f"Generation failed: {e}")
 
     def _generate_text_batch(
@@ -3472,7 +3107,8 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         generate_kwargs = {
             "pad_token_id": tokenizer.pad_token_id,
             "eos_token_id": tokenizer.eos_token_id,
-            "do_sample": False,  # Greedy decoding for consistent output
+            "do_sample": self.do_sample,
+            "repetition_penalty": self.repetition_penalty,
         }
         if max_new_tokens is not None:
             generate_kwargs["max_new_tokens"] = max_new_tokens
@@ -3513,6 +3149,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         use_biomcp: Optional[bool] = None,
         ground_snomed: Optional[bool] = None,
         snomed_embedding_model: Optional[str] = None,
+        snomed_index_name: Optional[str] = None,
     ) -> SOAPNote:
         """
         Generate a SOAP note for a patient.
@@ -3526,6 +3163,8 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             ground_snomed: Ground causal graph to SNOMED CT (overrides init setting)
             snomed_embedding_model: Embedding model for SNOMED linking (overrides init setting).
                 Options: "sapbert", "qwen3-0.6b", "gte-qwen2", etc.
+            snomed_index_name: Name of pre-built SNOMED index (overrides init setting).
+                Use "snomed_full" for full vocabulary after building with build_snomed_index().
 
         Returns:
             SOAPNote object with structured output
@@ -3536,17 +3175,60 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         use_biomcp = use_biomcp if use_biomcp is not None else self.use_biomcp
         ground_snomed = ground_snomed if ground_snomed is not None else self.ground_snomed
         snomed_embedding_model = snomed_embedding_model if snomed_embedding_model is not None else self.snomed_embedding_model
+        # Temporarily set index name if overridden for this call
+        if snomed_index_name is not None:
+            old_index_name = self.snomed_index_name
+            self.snomed_index_name = snomed_index_name
 
         patient_name = patient.name or patient.patient_id[:8]
+
+        # Calculate total steps for progress bar
+        # Steps: [biomcp] + [images] + soap_generation + [causal_graph] + [snomed_grounding] + [genetic_summary] + parsing
+        total_steps = 1  # SOAP generation
+        total_steps += 1  # Parsing
+        if use_biomcp:
+            total_steps += 1  # BioMCP enrichment
+            if self.separate_genetics:
+                total_steps += 1  # Genetic interpretation summary (separate LLM call)
+        if include_imaging and hasattr(patient, 'dicom_paths') and patient.dicom_paths:
+            total_steps += 1  # Image loading
+        if self.separate_causal_graph:
+            total_steps += 1  # Causal graph generation
+        if ground_snomed:
+            total_steps += 1  # SNOMED grounding
+
+        # Create progress bar early
+        pbar = None
+        if _tqdm_available and self.verbose:
+            pbar = _tqdm(total=total_steps, desc=f"SOAP: {patient_name[:12]}")
+            pbar.set_postfix_str("Formatting patient data")
 
         # Get patient data (with optional BioMCP timing)
         biomcp_seconds = 0.0
         if use_biomcp:
+            if pbar:
+                pbar.set_postfix_str("BioMCP: enriching variants")
+            elif self.verbose:
+                print(f"  BioMCP: enriching genetic variants...")
+
             biomcp_start = time.perf_counter()
-            patient_text, biomcp_annotations = FHIRFormatter.format_patient_for_llm(patient, use_biomcp=True)
+            # When separate_genetics=True: exclude genomics from main text, generate separately
+            # When separate_genetics=False: include genomics inline in the SOAP generation
+            debug_verbose = isinstance(self.verbose, int) and self.verbose >= 2
+            include_genomics_inline = not self.separate_genetics
+            patient_text, biomcp_annotations = FHIRFormatter.format_patient_for_llm(
+                patient, use_biomcp=True, include_genomics=include_genomics_inline, verbose=debug_verbose
+            )
             biomcp_seconds = time.perf_counter() - biomcp_start
-            if self.verbose:
+
+            if pbar:
+                pbar.update(1)
+                n_variants = len(biomcp_annotations) if biomcp_annotations else 0
+                pbar.set_postfix_str(f"BioMCP: {n_variants} variants ({biomcp_seconds:.1f}s)")
+            elif self.verbose:
                 print(f"  BioMCP enrichment: {biomcp_seconds:.2f}s")
+                if debug_verbose:
+                    print(f"    [DEBUG] biomcp_annotations has {len(biomcp_annotations)} entries")
         else:
             patient_text, biomcp_annotations = FHIRFormatter.format_patient_for_llm(patient, use_biomcp=False)
         text_tokens = len(patient_text) // 4  # Rough estimate
@@ -3554,7 +3236,11 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         # Load images if requested
         images = []
         if include_imaging and patient.dicom_paths:
+            if pbar:
+                pbar.set_postfix_str(f"Loading {len(patient.dicom_paths)} DICOM images")
             images = self._load_patient_images(patient, max_images)
+            if pbar:
+                pbar.update(1)
 
         # Determine chunk period (handles "auto" mode)
         auto_reason = None
@@ -3585,8 +3271,8 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             )
         )
 
-        # Report generation mode
-        if self.verbose:
+        # Report generation mode (only if no progress bar)
+        if self.verbose and not pbar:
             print(f"Generating SOAP note for: {patient_name}")
             print(f"  Input: ~{text_tokens:,} tokens", end="")
             if effective_period is not None:
@@ -3610,19 +3296,76 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             else:
                 print("  Processing: DIRECT")
 
+        # Generate SOAP note
         if use_hierarchical:
-            result = self._generate_hierarchical(patient, images, biomcp_annotations, chunks, biomcp_seconds)
+            if pbar:
+                pbar.set_postfix_str(f"Generating SOAP (hierarchical, {n_chunks} chunks)")
+            result = self._generate_hierarchical(patient, images, biomcp_annotations, chunks, biomcp_seconds, pbar=pbar)
         else:
-            result = self._generate_direct(patient, patient_text, images, biomcp_annotations, biomcp_seconds)
+            if pbar:
+                pbar.set_postfix_str("Generating SOAP note")
+            result = self._generate_direct(patient, patient_text, images, biomcp_annotations, biomcp_seconds, pbar=pbar)
 
         # Ground causal graph to SNOMED CT if enabled
         if ground_snomed:
+            if pbar:
+                pbar.set_postfix_str("SNOMED: grounding causal graph")
+
             if self.grounded_graph_mode:
                 # Two-stage approach: extract entities, ground, then build relationships
-                result = self._generate_grounded_causal_graph(result, embedding_model=snomed_embedding_model)
+                result = self._generate_grounded_causal_graph(result, embedding_model=snomed_embedding_model, pbar=pbar)
             else:
                 # Retrospective grounding of free-form graph
                 result = self._ground_causal_graph(result, embedding_model=snomed_embedding_model)
+
+            if pbar:
+                pbar.update(1)
+
+        # Generate genetic interpretation summary if separate_genetics=True and BioMCP data is available
+        # When separate_genetics=False, genetics were already included inline in the SOAP generation
+        debug_verbose = isinstance(self.verbose, int) and self.verbose >= 2
+        has_genetic_data = hasattr(patient, 'genomics') and patient.genomics is not None and len(patient.genomics) > 0
+
+        if debug_verbose:
+            print(f"    [DEBUG] Genetic summary check: separate_genetics={self.separate_genetics}, biomcp_annotations={bool(biomcp_annotations)} ({len(biomcp_annotations) if biomcp_annotations else 0} entries), use_biomcp={self.use_biomcp}, has_genetic_data={has_genetic_data}")
+
+        # Warn if patient has genetic data but we got no BioMCP annotations
+        if has_genetic_data and use_biomcp and not biomcp_annotations:
+            if self.verbose:
+                print(f"  [WARNING] Patient has genetic data ({len(patient.genomics)} variants) but BioMCP returned 0 annotations")
+                print(f"  [WARNING] Genetic interpretation may be incomplete. Check BioMCP installation/API.")
+
+        # Only generate separate genetic summary if separate_genetics=True
+        if self.separate_genetics and biomcp_annotations and self.use_biomcp:
+            genetic_summary = self._generate_genetic_summary(result, biomcp_annotations, pbar=pbar)
+
+            # Error if genetic summary generation failed
+            if not genetic_summary or not genetic_summary.strip():
+                raise RuntimeError(
+                    f"Genetic summary generation returned empty result. "
+                    f"BioMCP provided {len(biomcp_annotations)} annotations but LLM returned no summary."
+                )
+
+            result.genetic_summary = genetic_summary
+            # Append to raw_response so it's included in full output
+            if genetic_summary and result.raw_response:
+                result.raw_response = result.raw_response.rstrip() + "\n\n# Genetic Interpretation\n" + genetic_summary
+        elif debug_verbose:
+            if not self.separate_genetics:
+                print(f"    [DEBUG] Skipping separate genetic summary: separate_genetics=False (genetics included inline)")
+            elif not self.use_biomcp:
+                print(f"    [DEBUG] Skipping genetic summary: use_biomcp is False")
+            elif not biomcp_annotations:
+                print(f"    [DEBUG] Skipping genetic summary: biomcp_annotations is empty")
+
+        # Close progress bar
+        if pbar:
+            pbar.set_postfix_str("Done")
+            pbar.close()
+
+        # Restore original index name if we temporarily overrode it
+        if snomed_index_name is not None:
+            self.snomed_index_name = old_index_name
 
         return result
 
@@ -3633,7 +3376,12 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             embedding_model: Override the embedding model (if different from cached linker,
                            a new linker will be created)
         """
-        from synthlab.snomed import SNOMEDLinker, EMBEDDING_MODELS, get_sample_snomed_concepts
+        from synthlab.snomed import (
+            SNOMEDLinker, EMBEDDING_MODELS, get_sample_snomed_concepts,
+            load_snomed_linker, list_snomed_indices, build_snomed_index,
+            load_snomed_from_omop,
+        )
+        from synthlab.download_snomed import get_concept_csv_path, is_snomed_available
 
         # Determine which model to use
         model_name = embedding_model or self.snomed_embedding_model or "sapbert"
@@ -3649,17 +3397,64 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         if self.verbose:
             print(f"  Loading SNOMED linker ({model_name})...")
 
+        # If index_name is specified, try to load from cache
+        if self.snomed_index_name:
+            try:
+                self._snomed_linker = load_snomed_linker(
+                    index_name=self.snomed_index_name,
+                    model_id=model_id,
+                    verbose=self.verbose,
+                )
+                return self._snomed_linker
+            except FileNotFoundError:
+                if self.verbose:
+                    print(f"  WARNING: Index '{self.snomed_index_name}' not found!")
+                    print(f"           Build it first with: sl.build_snomed_index(omop_path, index_name='{self.snomed_index_name}')")
+                    print(f"           Falling back to sample concepts...")
+
+        # Try to load any existing full index matching the current model
+        model_suffix = SNOMEDLinker._get_model_cache_suffix(model_id)
+        indices = list_snomed_indices(verbose=False)
+        for idx_name, info in indices.items():
+            # Only consider indices built with the same model
+            if not idx_name.endswith(f"_{model_suffix}"):
+                continue
+            if info.get('n_concepts', 0) > 1000:  # Likely a full index
+                if self.verbose:
+                    print(f"  Found existing index '{idx_name}' ({info['n_concepts']:,} concepts)")
+                try:
+                    # Strip the model suffix to get the base index name
+                    base_name = idx_name.rsplit(f"_{model_suffix}", 1)[0]
+                    self._snomed_linker = load_snomed_linker(
+                        index_name=base_name,
+                        model_id=model_id,
+                        verbose=self.verbose,
+                    )
+                    return self._snomed_linker
+                except Exception:
+                    pass  # Try next or fall back
+
+        # Fall back: download SNOMED vocabulary and build full index
+        if self.verbose:
+            print(f"  No SNOMED index found. Building full index...")
+
+        # Download CONCEPT.csv if not available
+        concept_csv_path = get_concept_csv_path()  # Auto-downloads if needed
+
+        # Load concepts and build index
+        if self.verbose:
+            print(f"  Loading SNOMED concepts from {concept_csv_path.name}...")
+        concepts = load_snomed_from_omop(str(concept_csv_path), verbose=self.verbose)
+
+        if self.verbose:
+            print(f"  Building SNOMED index with {len(concepts):,} concepts...")
+            print(f"  (This is a one-time operation, index will be cached)")
+
         self._snomed_linker = SNOMEDLinker(
             model_id=model_id,
             verbose=self.verbose,
         )
-
-        # Auto-build index with sample concepts if it doesn't exist
-        if not self._snomed_linker.is_ready():
-            if self.verbose:
-                print(f"  Building SNOMED index (first time for {model_name})...")
-            concepts = get_sample_snomed_concepts()
-            self._snomed_linker.build_index(concepts)
+        self._snomed_linker.build_index(concepts)
 
         return self._snomed_linker
 
@@ -3711,6 +3506,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         self,
         soap_note: SOAPNote,
         embedding_model: Optional[str] = None,
+        pbar: Optional[Any] = None,
     ) -> SOAPNote:
         """Generate causal graph using two-stage grounded approach.
 
@@ -3736,35 +3532,100 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
         try:
             # Get the linker
+            if pbar:
+                pbar.set_postfix_str("SNOMED: loading linker")
             linker = self._load_snomed_linker(embedding_model=embedding_model)
 
             # Stage 1: Extract entities from SOAP note
-            if self.verbose:
+            if pbar:
+                pbar.set_postfix_str("SNOMED: extracting entities")
+            elif self.verbose:
                 print("  Stage 1: Extracting medical entities...")
 
+            # Use cleaned SOAP text for entity extraction
+            # If the SOAP note has garbage/repetition, the entity extraction will also fail
             soap_text = str(soap_note)
-            entity_prompt = self.ENTITY_EXTRACTION_PROMPT.format(soap_note=soap_text)
-            entity_response = self._generate_text(entity_prompt, max_new_tokens=2000)
 
-            # Parse extracted entities
+            # Additional cleaning for entity extraction - remove any remaining repetition
+            soap_text = self._remove_repetition_loops(soap_text)
+
             entities = []
             entity_types = {}
-            for line in entity_response.strip().split("\n"):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                # Parse "entity_name | type" format
-                if "|" in line:
-                    parts = line.split("|")
-                    entity_name = parts[0].strip()
-                    entity_type = parts[1].strip().lower() if len(parts) > 1 else "condition"
-                else:
-                    entity_name = line.strip()
-                    entity_type = "condition"
 
-                if entity_name and len(entity_name) > 1:
-                    entities.append(entity_name)
-                    entity_types[entity_name] = entity_type
+            # Use external LLM for entity extraction if specified
+            if self.entity_extraction_model:
+                from synthlab.snomed import MedicalEntityExtractor
+                # Lazy-load and cache the extractor
+                if self._entity_extractor is None:
+                    self._entity_extractor = MedicalEntityExtractor(
+                        model=self.entity_extraction_model,
+                        verbose=self.verbose,
+                    )
+                    if self.verbose:
+                        print(f"    Entity extraction model: {self._entity_extractor.model}")
+                extracted = self._entity_extractor.extract(soap_text)
+                for ent in extracted:
+                    # Use standardized form for better SNOMED matching
+                    entity_name = ent.standardized or ent.raw_text
+                    if entity_name and len(entity_name) > 1:
+                        entities.append(entity_name)
+                        entity_types[entity_name] = ent.entity_type
+            else:
+                # Use local MedGemma model
+                entity_prompt = self.ENTITY_EXTRACTION_PROMPT.format(soap_note=soap_text)
+                entity_system = (
+                    "You output ONLY a plain text list, one item per line. "
+                    "No JSON, no markdown, no explanations, no commentary."
+                )
+                entity_response = self._generate_text(
+                    entity_prompt,
+                    max_new_tokens=2000,
+                    system_prompt=entity_system,
+                )
+
+                # Check for empty/no-content responses
+                response_stripped = entity_response.strip()
+                if not response_stripped or response_stripped.upper() == "NO_ENTITIES":
+                    if self.verbose:
+                        print("    No entities found in SOAP note")
+                    return soap_note
+
+                # Parse extracted entities - one per line
+                for line in response_stripped.split("\n"):
+                    line = line.strip()
+                    # Skip empty, comment, or bullet lines
+                    if not line or line.startswith("#"):
+                        continue
+                    # Skip JSON artifacts (model returned JSON instead of plain text)
+                    if line in ['```json', '```', '[', ']', '{', '}'] or line.startswith('```'):
+                        continue
+                    if line.startswith('{') and line.endswith('}'):
+                        # Try to extract entity from JSON object like {"entity": "value"}
+                        import re
+                        match = re.search(r'"entity"\s*:\s*"([^"]+)"', line)
+                        if match:
+                            line = match.group(1)
+                        else:
+                            continue
+                    # Clean up common prefixes (bullets, numbers, dashes)
+                    line = line.lstrip("-•*0123456789.) ").strip()
+                    if not line:
+                        continue
+                    # Skip lines that look like reasoning/instructions
+                    line_lower = line.lower()
+                    if any(marker in line_lower for marker in [
+                        "i ", "the user", "want", "need", "identify", "extract",
+                        "should", "will", "let me", "here are", "following",
+                        "entities", "soap note", "output", "no medical", "no entities"
+                    ]):
+                        continue
+                    # Handle legacy format with "|" if present (backward compatibility)
+                    if "|" in line:
+                        line = line.split("|")[0].strip()
+                    # Validate entity: reasonable length, not just punctuation
+                    if line and len(line) > 2 and len(line) < 100 and any(c.isalpha() for c in line):
+                        entities.append(line)
+                        entity_types[line] = "unknown"  # Type will be inferred from SNOMED
 
             if self.verbose:
                 print(f"    Extracted {len(entities)} entities")
@@ -3775,14 +3636,16 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                 return soap_note
 
             # Stage 2: Ground entities to SNOMED
-            if self.verbose:
+            if pbar:
+                pbar.set_postfix_str(f"SNOMED: grounding {len(entities)} entities")
+            elif self.verbose:
                 print("  Stage 2: Grounding to SNOMED CT...")
 
-            # Link all entities
+            # Link all entities (threshold 0.7 for higher quality matches, reduce false positives)
             results = linker.link_batch_with_cache(
                 entities,
                 k=1,
-                threshold=0.5,
+                threshold=0.7,
                 track_gaps=True,
             )
 
@@ -3795,9 +3658,27 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             unmatched_entities = []
             duplicate_mappings = 0
 
+            # Reject obviously generic/garbage terms that indicate poor entity extraction
+            # These are meta-terms, not actual medical concepts
+            generic_terms_to_reject = {
+                "thought", "identified", "assessment",
+                "observation", "event", "situation", "context",
+                "unknown", "other", "unspecified", "general",
+            }
+
             for entity_name, matches in results:
-                if matches and matches[0].score >= 0.5:
+                if matches and matches[0].score >= 0.7:
                     match = matches[0]
+
+                    # Reject generic/garbage terms (meta-terms, not medical concepts)
+                    term_lower = match.term.lower()
+                    if term_lower in generic_terms_to_reject:
+                        unmatched_entities.append(f"{entity_name} (rejected: generic term '{match.term}')")
+                        continue
+
+                    # Get entity type from extraction (used for node labeling only)
+                    entity_type = entity_types.get(entity_name, "condition")
+
                     matched_count += 1
                     # Avoid duplicates (same concept from different mentions)
                     if match.concept_id not in grounded_concepts:
@@ -3805,7 +3686,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                             mention=entity_name,
                             concept_id=match.concept_id,
                             term=match.term,
-                            node_type=entity_types.get(entity_name, "condition"),
+                            node_type=entity_type,
                             confidence=match.score,
                         )
                     else:
@@ -3835,27 +3716,88 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                 return soap_note
 
             # Stage 3: Identify relationships between grounded concepts
-            if self.verbose:
+            if pbar:
+                pbar.set_postfix_str(f"SNOMED: identifying relationships ({len(grounded_concepts)} concepts)")
+            elif self.verbose:
                 print("  Stage 3: Identifying causal relationships...")
 
-            # Build concept list with short labels (easier for LLM to use)
+            # Build concept list with SNOMED IDs (more meaningful than arbitrary labels)
+            # Format: Term_With_Underscores[SNOMED:concept_id]
             concept_lines = []
-            label_to_cid = {}  # Map short label -> concept_id
-            cid_to_label = {}  # Map concept_id -> short label
-            for i, (cid, node) in enumerate(grounded_concepts.items(), 1):
-                label = f"C{i}"
-                label_to_cid[label] = cid
-                cid_to_label[cid] = label
-                concept_lines.append(f"{label} = {node.term} [{node.node_type}]")
+            label_to_node = {}  # Map "Term[SNOMED:ID]" -> GroundedNode
+            for cid, node in grounded_concepts.items():
+                # Convert term to underscore format for easier LLM handling
+                term_label = node.term.replace(" ", "_").replace("-", "_")
+                # Create full label with SNOMED ID
+                full_label = f"{term_label}[SNOMED:{cid}]"
+                label_to_node[full_label] = node
+                # Also map variations (uppercase, lowercase) for robust parsing
+                label_to_node[full_label.upper()] = node
+                label_to_node[full_label.lower()] = node
+                concept_lines.append(full_label)
             concept_list = "\n".join(concept_lines)
 
             relationship_prompt = self.GROUNDED_RELATIONSHIP_PROMPT.format(
-                concept_list=concept_list
+                soap_note=soap_text,
+                concept_list=concept_list,
             )
-            relationship_response = self._generate_text(relationship_prompt, max_new_tokens=2000)
+
+            # Debug: show concept list being sent
+            if self.verbose:
+                print(f"    Concept list ({len(grounded_concepts)} concepts):")
+                for line in concept_lines[:5]:
+                    print(f"      {line}")
+                if len(concept_lines) > 5:
+                    print(f"      ... and {len(concept_lines) - 5} more")
+
+            # System prompt to enforce structured output format
+            relationship_system = (
+                "You output ONLY structured data in the exact format requested. "
+                "You never explain, narrate, or add commentary. "
+                "Each line of your output is a relationship in the format: Concept[SNOMED:ID] ARROW Concept[SNOMED:ID]"
+            )
+
+            relationship_response = self._generate_text(
+                relationship_prompt,
+                max_new_tokens=2000,
+                system_prompt=relationship_system,
+            )
+
+            # Check if response contains any arrows (relationship format)
+            has_arrows = any(arrow in relationship_response for arrow in ["++>", "+>", "-->", "->", "=>"])
+
+            # Retry with simpler prompt if empty OR if it's prose without arrows
+            if not relationship_response.strip() or not has_arrows:
+                if self.verbose:
+                    reason = "empty" if not relationship_response.strip() else "no relationship arrows found (prose output)"
+                    print(f"    First attempt: {reason}, retrying with stricter prompt...")
+                # Retry with context included
+                simple_prompt = f"""Based on this patient's history, output causal relationships.
+
+PATIENT SUMMARY:
+{soap_text[:4000]}
+
+CONCEPTS:
+{concept_list}
+
+FORMAT: Concept[SNOMED:ID] ++> Concept[SNOMED:ID]
+ARROWS: ++> (risk), --> (treatment/protection)
+
+Output one relationship per line. No other text."""
+                relationship_response = self._generate_text(
+                    simple_prompt,
+                    max_new_tokens=1000,
+                    system_prompt=relationship_system,
+                )
+
+                # Check again
+                has_arrows = any(arrow in relationship_response for arrow in ["++>", "+>", "-->", "->", "=>"])
+                if not has_arrows and self.verbose:
+                    print(f"    WARNING: Retry also failed to produce relationship format")
 
             # Parse relationships
             grounded_edges = []
+            # Support various arrow formats (including unicode)
             edge_type_map = {
                 "++>": "risk",
                 "+>": "risk",
@@ -3863,48 +3805,146 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                 "-->": "protective",
                 "->": "protective",
                 "=>": "causal",
+                # Unicode arrows
+                "→": "causal",
+                "⟶": "causal",
+                "⇒": "causal",
+                "➔": "causal",
+                "➜": "causal",
+                # Spaced variants
+                " -> ": "causal",
+                " --> ": "protective",
+                " => ": "causal",
+                " +> ": "risk",
+                " ++> ": "risk",
             }
 
-            # Debug: show first few lines of response
+            # Debug: show raw response
             if self.verbose:
-                response_lines = relationship_response.strip().split("\n")[:5]
-                print(f"    LLM response (first 5 lines): {response_lines}")
+                raw_resp = relationship_response.strip()
+                if not raw_resp:
+                    print(f"    WARNING: LLM returned empty response for relationships")
+                else:
+                    response_lines = raw_resp.split("\n")
+                    print(f"    LLM response ({len(response_lines)} lines, first 10):")
+                    for i, line in enumerate(response_lines[:10]):
+                        # Check if line contains any arrow
+                        has_arrow = any(arrow in line for arrow in edge_type_map.keys())
+                        arrow_indicator = " [HAS ARROW]" if has_arrow else ""
+                        print(f"      {i+1}: {line[:100]}{arrow_indicator}")
+                    if len(response_lines) > 10:
+                        print(f"      ... and {len(response_lines) - 10} more lines")
 
             parsed_count = 0
+            skipped_lines = []  # Track why lines were skipped
             invalid_refs = 0
+
+            # Helper to find node by label (handles case variations)
+            def find_node(label: str):
+                """Find GroundedNode by label, handling case and format variations."""
+                label = label.strip()
+                # Try exact match first
+                if label in label_to_node:
+                    return label_to_node[label]
+                # Try case variations
+                if label.upper() in label_to_node:
+                    return label_to_node[label.upper()]
+                if label.lower() in label_to_node:
+                    return label_to_node[label.lower()]
+                # Try extracting SNOMED ID and matching by that
+                import re
+                match = re.search(r'\[SNOMED:(\d+)\]', label, re.IGNORECASE)
+                if match:
+                    snomed_id = match.group(1)
+                    if snomed_id in grounded_concepts:
+                        return grounded_concepts[snomed_id]
+                return None
+
             for line in relationship_response.strip().split("\n"):
-                line = line.strip().upper()  # Normalize to uppercase for C1, C2 matching
+                line = line.strip()
+                # Skip empty lines, comments, and lines that look like explanations
                 if not line or line.startswith("#"):
+                    skipped_lines.append((line[:50], "empty/comment"))
+                    continue
+                # Skip lines that are too long (likely explanations) - increased limit for SNOMED labels
+                if len(line) > 200:
+                    skipped_lines.append((line[:50], f"too long ({len(line)} chars)"))
+                    continue
+                # Skip lines that look like reasoning/explanations
+                line_lower = line.lower()
+                if any(word in line_lower for word in ["thought", "user", "want", "task", "analyze", "means", "because", "since"]):
+                    skipped_lines.append((line[:50], "explanation text"))
                     continue
 
-                # Parse "LABEL ARROW LABEL" format (e.g., "C1 ++> C2")
-                for arrow, edge_type in edge_type_map.items():
+                # Parse "Concept[SNOMED:ID] ARROW Concept[SNOMED:ID]" format
+                # Also handles interactions: "A && B ARROW C" (AND) or "A || B ARROW C" (OR)
+                for arrow, _ in edge_type_map.items():
                     if arrow in line:
                         parts = line.split(arrow)
                         if len(parts) == 2:
-                            source_label = parts[0].strip()
-                            target_label = parts[1].strip()
+                            # Clean labels: strip whitespace, bullets, asterisks
+                            source_part = parts[0].strip().lstrip("*-•").strip()
+                            target_label = parts[1].strip().lstrip("*-•").strip()
                             parsed_count += 1
 
-                            # Convert labels to concept IDs
-                            source_cid = label_to_cid.get(source_label)
-                            target_cid = label_to_cid.get(target_label)
+                            # Check for interaction operators in source
+                            # AND interaction: "A && B" (both required together)
+                            # OR interaction: "A || B" (either sufficient)
+                            interaction = None
+                            source_labels = []
 
-                            # Validate both concepts exist
-                            if source_cid and target_cid:
+                            if ' && ' in source_part:
+                                # AND interaction - split on " && "
+                                source_labels = [s.strip() for s in source_part.split(' && ') if s.strip()]
+                                interaction = "and" if len(source_labels) > 1 else None
+                            elif ' || ' in source_part:
+                                # OR interaction - split on " || "
+                                source_labels = [s.strip() for s in source_part.split(' || ') if s.strip()]
+                                interaction = "or" if len(source_labels) > 1 else None
+                            else:
+                                # Simple single source
+                                source_labels = [source_part]
+
+                            # Find all source nodes
+                            source_nodes = []
+                            all_sources_valid = True
+                            for src_label in source_labels:
+                                src_node = find_node(src_label)
+                                if src_node:
+                                    source_nodes.append(src_node)
+                                else:
+                                    all_sources_valid = False
+                                    break
+
+                            # Find target node
+                            target_node = find_node(target_label)
+
+                            # Validate all concepts exist
+                            if all_sources_valid and source_nodes and target_node:
                                 grounded_edges.append(GroundedEdge(
-                                    source=grounded_concepts[source_cid],
-                                    target=grounded_concepts[target_cid],
+                                    sources=source_nodes,
+                                    target=target_node,
                                     relation=arrow,
+                                    interaction=interaction,
                                 ))
                             else:
                                 invalid_refs += 1
                                 if self.verbose and invalid_refs <= 3:
-                                    print(f"    Invalid ref: '{source_label}' -> '{target_label}' (not in label list)")
+                                    print(f"    Invalid ref: '{source_part[:50]}...' -> '{target_label[:50]}...'")
                         break
 
             if self.verbose:
                 print(f"    Parsed {parsed_count} relationships, {len(grounded_edges)} valid, {invalid_refs} invalid refs")
+                if len(grounded_edges) == 0 and parsed_count > 0:
+                    print(f"    WARNING: {parsed_count} relationships were parsed but none were valid!")
+                    print(f"    This usually means concept labels don't match between LLM output and concept list")
+                elif len(grounded_edges) == 0 and parsed_count == 0:
+                    print(f"    WARNING: No relationships parsed from LLM response!")
+                    print(f"    Check that the LLM is outputting the correct format: Concept[SNOMED:ID] ++> Concept[SNOMED:ID]")
+                    # Show the full response for debugging
+                    print(f"    Full relationship response:")
+                    for line in relationship_response.strip().split("\n")[:20]:
+                        print(f"      {line}")
 
             # Build grounded causal graph
             grounded_graph = GroundedCausalGraph(
@@ -3914,14 +3954,33 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
             soap_note.grounded_causal_graph = grounded_graph
 
+            # Always save raw relationship response (useful for debugging)
+            soap_note.causal_graph_raw = relationship_response
+
+            # Save the prompt used for debugging
+            if hasattr(soap_note, 'prompts_used') and soap_note.prompts_used:
+                soap_note.prompts_used["grounded_relationships"] = relationship_prompt
+            else:
+                soap_note.prompts_used = {"grounded_relationships": relationship_prompt}
+
             # Generate text representation of grounded graph for display
             graph_lines = ["```grounded_graph"]
             for edge in grounded_edges:
-                src = edge.source
                 tgt = edge.target
-                # Format: SNOMED_Term[type] ARROW SNOMED_Term[type] (SCTID:xxx -> SCTID:yyy)
+                # Handle interaction edges (multiple sources)
+                if edge.is_interaction:
+                    op = " && " if edge.interaction == "and" else " || "
+                    source_strs = [
+                        f"{s.term.replace(' ', '_')}[{s.node_type}]"
+                        for s in edge.sources
+                    ]
+                    source_part = op.join(source_strs)
+                else:
+                    src = edge.source
+                    source_part = f"{src.term.replace(' ', '_')}[{src.node_type}]"
+                # Format: Source(s) ARROW Target
                 graph_lines.append(
-                    f"{src.term.replace(' ', '_')}[{src.node_type}] {edge.relation} "
+                    f"{source_part} {edge.relation} "
                     f"{tgt.term.replace(' ', '_')}[{tgt.node_type}]"
                 )
             graph_lines.append("```")
@@ -3930,18 +3989,21 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
             grounded_graph_text = "\n".join(graph_lines)
 
-            # Update the SOAP note's raw text to include grounded graph
+            # Append grounded graph to raw_response (only if there's actual content)
             if hasattr(soap_note, 'raw_response') and soap_note.raw_response:
-                soap_note.raw_response = soap_note.raw_response.replace(
-                    "(Grounded causal graph will be generated using SNOMED CT concepts)",
-                    grounded_graph_text
-                )
+                # Only append if raw_response has real content (not just whitespace/metadata)
+                if soap_note.raw_response.strip():
+                    soap_note.raw_response = soap_note.raw_response.rstrip() + "\n\n# Causal Graph\n" + grounded_graph_text
 
             # Also update the causal_graph field
             soap_note.causal_graph = grounded_graph_text
 
             if self.verbose:
-                print(f"  Grounded graph: {len(grounded_graph.nodes)} nodes, {len(grounded_graph.edges)} edges")
+                interaction_count = len(grounded_graph.interactions())
+                msg = f"  Grounded graph: {len(grounded_graph.nodes)} nodes, {len(grounded_graph.edges)} edges"
+                if interaction_count > 0:
+                    msg += f" ({interaction_count} interactions)"
+                print(msg)
 
         except Exception as e:
             if self.verbose:
@@ -4018,8 +4080,14 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         direct_patients = []
         hierarchical_patients = []
 
+        debug_verbose = isinstance(self.verbose, int) and self.verbose >= 2
+        include_genomics_inline = not self.separate_genetics  # Include genomics inline unless generating separately
         for i, patient in enumerate(patients):
-            patient_text, biomcp_annotations = FHIRFormatter.format_patient_for_llm(patient, use_biomcp=use_biomcp)
+            # When separate_genetics=True: exclude genomics from main text, generate separately
+            # When separate_genetics=False: include genomics inline in the SOAP generation
+            patient_text, biomcp_annotations = FHIRFormatter.format_patient_for_llm(
+                patient, use_biomcp=use_biomcp, include_genomics=include_genomics_inline, verbose=debug_verbose
+            )
             text_tokens = len(patient_text) // 4
 
             # Load images
@@ -4060,6 +4128,9 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             if self.verbose and pbar is None:
                 print(f"  Processing {len(direct_patients)} patients with direct generation...")
 
+            # Skip inline causal graph if grounded graph will be generated separately
+            skip_inline_graph = self.separate_causal_graph or (self.ground_snomed and self.grounded_graph_mode)
+
             for batch_start in range(0, len(direct_patients), batch_size):
                 batch = direct_patients[batch_start:batch_start + batch_size]
 
@@ -4068,14 +4139,16 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                 batch_images = []
 
                 for idx, patient, patient_text, images, biomcp_ann, n_chunks in batch:
-                    if images:
-                        prompt = self.SOAP_USER_PROMPT_WITH_IMAGES.format(
-                            patient_data=patient_text,
-                            num_images=len(images)
-                        )
-                    else:
-                        prompt = self.SOAP_USER_PROMPT_NO_IMAGES.format(patient_data=patient_text)
-
+                    # Build direct prompt with conditional sections
+                    prompt = self._build_direct_prompt(
+                        patient_data=patient_text,
+                        include_images=bool(images),
+                        num_images=len(images) if images else 0,
+                        include_causal_graph=not skip_inline_graph,
+                    )
+                    # Add admission exclusion instruction if inline graph is included
+                    if not skip_inline_graph:
+                        prompt += self._get_admission_exclusion_instruction()
                     batch_prompts.append(prompt)
                     batch_images.append(images if images else None)
 
@@ -4130,6 +4203,35 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         results.sort(key=lambda x: x[0])
         final_notes = [soap_note for idx, soap_note in results]
 
+        # Generate separate causal graphs for batch-processed notes if enabled
+        # (hierarchical notes already handle this in _generate_hierarchical)
+        skip_freeform_graph = ground_snomed and self.grounded_graph_mode
+        if self.separate_causal_graph and not skip_freeform_graph:
+            # Find notes that don't have a causal graph yet (batch-processed direct notes)
+            notes_needing_graphs = [(i, note) for i, note in enumerate(final_notes) if not note.causal_graph]
+            if notes_needing_graphs:
+                if self.verbose:
+                    print(f"  Generating separate causal graphs for {len(notes_needing_graphs)} notes...")
+                from synthlab.causal_graph import parse_causal_graph
+                graph_system = (
+                    "You output ONLY causal relationships in the format: Cause[type] ARROW Effect[type]. "
+                    "One relationship per line. No explanations, no prose, no commentary."
+                )
+                for i, note in notes_needing_graphs:
+                    graph_prompt = self.CAUSAL_GRAPH_PROMPT.format(soap_note=note.raw_response or "")
+                    graph_prompt += self._get_admission_exclusion_instruction()
+                    causal_graph_response = self._generate_text(
+                        graph_prompt,
+                        max_new_tokens=2000,
+                        system_prompt=graph_system,
+                    )
+                    # Append to raw response
+                    if note.raw_response:
+                        note.raw_response = note.raw_response.rstrip() + "\n\n# Causal Graph\n" + causal_graph_response.strip()
+                    # Parse and store causal graph
+                    note.causal_graph = parse_causal_graph(causal_graph_response)
+                    note.causal_graph_raw = causal_graph_response
+
         # Ground causal graphs to SNOMED CT if enabled
         if ground_snomed:
             if self.verbose:
@@ -4143,6 +4245,100 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
         return final_notes
 
+    def _generate_genetic_summary(
+        self,
+        soap_note: SOAPNote,
+        biomcp_annotations: dict[str, Any],
+        pbar: Optional[Any] = None,
+    ) -> str:
+        """
+        Generate a focused genetic interpretation summary.
+
+        This runs as a separate LLM call to avoid output truncation issues,
+        since Google's models have large input contexts (128K) but limited
+        output tokens (8192).
+
+        Args:
+            soap_note: The generated SOAP note (for context)
+            biomcp_annotations: Raw BioMCP variant annotations
+            pbar: Optional progress bar
+
+        Returns:
+            Genetic interpretation summary text
+        """
+        if not biomcp_annotations:
+            return ""
+
+        if pbar:
+            pbar.set_postfix_str(f"Generating genetic interpretation ({len(biomcp_annotations)} variants)")
+        elif self.verbose:
+            print(f"  Generating genetic interpretation for {len(biomcp_annotations)} variants...")
+
+        # Build a compact SOAP summary for context (avoid sending full note)
+        soap_context_parts = []
+        if soap_note.summary:
+            soap_context_parts.append(f"Summary: {soap_note.summary}")
+        if soap_note.assessment:
+            # Truncate assessment if too long
+            assessment = soap_note.assessment[:2000] if len(soap_note.assessment) > 2000 else soap_note.assessment
+            soap_context_parts.append(f"Assessment: {assessment}")
+        if soap_note.patient_story:
+            story = soap_note.patient_story[:1500] if len(soap_note.patient_story) > 1500 else soap_note.patient_story
+            soap_context_parts.append(f"Patient Story: {story}")
+
+        soap_summary = "\n\n".join(soap_context_parts) if soap_context_parts else "(No SOAP context available)"
+
+        # Format genetic annotations for the prompt
+        genetic_lines = []
+        for rsid, ann in biomcp_annotations.items():
+            gene = ann.get("gene", "unknown")
+            clin_sig = ann.get("clinical_significance", "unknown")
+            conditions = ann.get("conditions", [])
+            phenotypes = ann.get("phenotypes", [])
+            drug_associations = ann.get("drug_associations", [])
+            effect_type = ann.get("effect_type", "")
+            frequencies = ann.get("frequencies", {})
+
+            line_parts = [f"**{rsid}** ({gene})"]
+            line_parts.append(f"  - Clinical significance: {clin_sig}")
+
+            if conditions:
+                line_parts.append(f"  - Disease associations: {', '.join(conditions[:5])}")
+            if phenotypes:
+                line_parts.append(f"  - Phenotypes: {', '.join(phenotypes[:5])}")
+            if effect_type:
+                line_parts.append(f"  - Effect: {effect_type}")
+            if drug_associations:
+                line_parts.append(f"  - Drug interactions: {', '.join(drug_associations[:5])}")
+            if frequencies:
+                freq_str = ", ".join(f"{k}={v:.4f}" for k, v in frequencies.items() if isinstance(v, (int, float)))
+                if freq_str:
+                    line_parts.append(f"  - Population frequencies: {freq_str}")
+
+            genetic_lines.append("\n".join(line_parts))
+
+        genetic_annotations_text = "\n\n".join(genetic_lines)
+
+        # Build the prompt
+        prompt = self.GENETIC_SUMMARY_PROMPT.format(
+            soap_summary=soap_summary,
+            genetic_annotations=genetic_annotations_text,
+        )
+
+        # Generate the interpretation
+        start_time = time.perf_counter()
+        interpretation = self._generate_text(prompt, max_new_tokens=4096)
+        gen_seconds = time.perf_counter() - start_time
+
+        if self.verbose:
+            output_tokens = self._count_tokens(interpretation)
+            print(f"    Genetic summary: {output_tokens:,} tokens in {gen_seconds:.1f}s")
+
+        if pbar:
+            pbar.update(1)
+
+        return interpretation.strip()
+
     def _generate_direct(
         self,
         patient: Any,
@@ -4150,6 +4346,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         images: list,
         biomcp_annotations: Optional[dict[str, Any]] = None,
         biomcp_seconds: float = 0.0,
+        pbar: Optional[Any] = None,
     ) -> SOAPNote:
         """Generate SOAP note directly (for shorter histories)."""
         if biomcp_annotations is None:
@@ -4157,17 +4354,16 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         # Token counting
         input_tokens = self._count_tokens(patient_text)
 
-        # Determine steps: 2 for normal, 3 for separate causal graph
-        total_steps = 3 if self.separate_causal_graph else 2
-
-        # Progress bar for direct generation
-        if _tqdm_available and self.verbose:
+        # Use passed progress bar or create internal one
+        internal_pbar = False
+        if pbar is None and _tqdm_available and self.verbose:
+            # Create internal progress bar only if not passed from generate()
+            total_steps = 3 if self.separate_causal_graph else 2
             pbar = _tqdm(total=total_steps, desc="Generating SOAP note")
             pbar.set_postfix_str("Analyzing patient data" + (f" + {len(images)} images" if images else ""))
-        else:
-            pbar = None
+            internal_pbar = True
 
-        if self.verbose and not _tqdm_available:
+        if self.verbose and not pbar:
             print(f"\n  Token Statistics:")
             print(f"    Input (patient data): {input_tokens:,} tokens")
 
@@ -4175,40 +4371,59 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         # Skip inline causal graph if we'll generate grounded graph, or if separate_causal_graph is enabled
         skip_inline_graph = self.separate_causal_graph or (self.ground_snomed and self.grounded_graph_mode)
 
-        if skip_inline_graph:
-            # Use prompts without causal graph (grounded graph will be generated later)
-            if images:
-                prompt = self.SOAP_NO_GRAPH_WITH_IMAGES_PROMPT.format(
-                    patient_data=patient_text,
-                    num_images=len(images)
-                )
-            else:
-                prompt = self.SOAP_NO_GRAPH_PROMPT.format(patient_data=patient_text)
-        else:
-            # Use normal prompts with causal graph included
-            if images:
-                prompt = self.SOAP_USER_PROMPT_WITH_IMAGES.format(
-                    patient_data=patient_text,
-                    num_images=len(images)
-                )
-            else:
-                prompt = self.SOAP_USER_PROMPT_NO_IMAGES.format(patient_data=patient_text)
+        # Build direct prompt with conditional sections
+        prompt = self._build_direct_prompt(
+            patient_data=patient_text,
+            include_images=bool(images),
+            num_images=len(images) if images else 0,
+            include_causal_graph=not skip_inline_graph,
+        )
 
         # Add admission exclusion instruction if needed (for inline causal graph mode)
         if not skip_inline_graph:
             prompt += self._get_admission_exclusion_instruction()
 
+        # System prompt to enforce SOAP note structure
+        soap_system = (
+            "You are a clinical documentation specialist. "
+            "You output SOAP notes in markdown format with exactly these headers: "
+            "# Patient Story, # Subjective, # Objective, # Assessment, # Plan, # Future Considerations, # Summary. "
+            "Each section must start with its header on its own line."
+        )
+
         soap_start = time.perf_counter()
+        if self.verbose:
+            print(f"    [DEBUG] Prompt length: {len(prompt)} chars")
+            print(f"    [DEBUG] Prompt preview: {prompt[:500]}...")
+            print(f"    [DEBUG] patient_text length: {len(patient_text)} chars")
         response = self._generate_text(
             prompt,
             images=images if images else None,
             max_new_tokens=self.max_new_tokens_final,
+            system_prompt=soap_system,
         )
         soap_seconds = time.perf_counter() - soap_start
 
+        # Fail immediately if response is empty
+        if not response or not response.strip():
+            raise RuntimeError(
+                f"SOAP generation returned empty response.\n"
+                f"  Patient: {patient.patient_id}\n"
+                f"  Prompt length: {len(prompt)} chars\n"
+                f"  max_new_tokens: {self.max_new_tokens_final}"
+            )
+
         # Count output tokens
         output_tokens = self._count_tokens(response)
-        if self.verbose and not _tqdm_available:
+
+        # Detect truncation (output hit token limit)
+        if output_tokens >= self.max_new_tokens_final - 10:  # Small margin for tokenizer differences
+            if self.verbose:
+                print(f"  WARNING: Output may be truncated ({output_tokens:,} tokens = model limit)")
+            if pbar:
+                pbar.set_postfix_str("WARNING: output truncated!")
+
+        if self.verbose and not pbar:
             print(f"    Output (SOAP note): {output_tokens:,} tokens")
 
         if pbar:
@@ -4230,10 +4445,15 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             graph_prompt = self.CAUSAL_GRAPH_PROMPT.format(soap_note=response)
             # Add admission exclusion instruction if needed
             graph_prompt += self._get_admission_exclusion_instruction()
+            graph_system = (
+                "You output ONLY causal relationships in the format: Cause[type] ARROW Effect[type]. "
+                "One relationship per line. No explanations, no prose, no commentary."
+            )
             graph_start = time.perf_counter()
             causal_graph_response = self._generate_text(
                 graph_prompt,
                 max_new_tokens=2000,
+                system_prompt=graph_system,
             )
             causal_graph_seconds = time.perf_counter() - graph_start
             causal_graph_tokens = self._count_tokens(causal_graph_response)
@@ -4248,8 +4468,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             if pbar:
                 pbar.update(1)
         elif self.separate_causal_graph and skip_freeform_graph:
-            # Add placeholder - will be replaced with grounded graph
-            response = response.rstrip() + "\n\n# Causal Graph\n(Grounded causal graph will be generated using SNOMED CT concepts)"
+            # Grounded graph will be added later - don't add placeholder to raw response
             if pbar:
                 pbar.update(1)
 
@@ -4286,10 +4505,11 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
         if pbar:
             pbar.update(1)
-            pbar.close()
+            if internal_pbar:
+                pbar.close()
 
-        # Print token stats for tqdm mode too
-        if self.verbose and _tqdm_available:
+        # Print token stats for tqdm mode too (only if using internal pbar)
+        if self.verbose and internal_pbar:
             print(f"\n  Token Statistics:")
             print(f"    Input: {input_tokens:,} tokens")
             print(f"    Output: {output_tokens:,} tokens")
@@ -4307,6 +4527,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         biomcp_annotations: Optional[dict[str, Any]] = None,
         chunks: Optional[list[tuple[str, str, str]]] = None,
         biomcp_seconds: float = 0.0,
+        pbar: Optional[Any] = None,
     ) -> SOAPNote:
         """Generate SOAP note using hierarchical summarization."""
         if biomcp_annotations is None:
@@ -4326,7 +4547,13 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
         if not chunks:
             # Fallback to direct if no chunks
-            patient_text, fallback_biomcp = FHIRFormatter.format_patient_for_llm(patient, use_biomcp=self.use_biomcp)
+            # When separate_genetics=True: exclude genomics from main text
+            # When separate_genetics=False: include genomics inline
+            debug_verbose = isinstance(self.verbose, int) and self.verbose >= 2
+            include_genomics_inline = not self.separate_genetics
+            patient_text, fallback_biomcp = FHIRFormatter.format_patient_for_llm(
+                patient, use_biomcp=self.use_biomcp, include_genomics=include_genomics_inline, verbose=debug_verbose
+            )
             # Merge any new biomcp annotations
             if fallback_biomcp:
                 biomcp_annotations.update(fallback_biomcp)
@@ -4337,14 +4564,13 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         total_input_tokens = 0
         total_summary_tokens = 0
 
-        # Create progress bar for all steps
-        # Steps: n chunks + 1 aggregation + (1 causal graph if separate) + 1 parsing
-        total_steps = len(chunks) + 2 + (1 if self.separate_causal_graph else 0)
-
-        if _tqdm_available and self.verbose:
+        # Use passed progress bar or create internal one
+        internal_pbar = False
+        if pbar is None and _tqdm_available and self.verbose:
+            # Create internal progress bar only if not passed from generate()
+            total_steps = len(chunks) + 2 + (1 if self.separate_causal_graph else 0)
             pbar = _tqdm(total=total_steps, desc="Generating SOAP note")
-        else:
-            pbar = None
+            internal_pbar = True
 
         # Summarize each chunk sequentially
         summaries = []
@@ -4361,9 +4587,28 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             input_tokens = self._count_tokens(chunk_text)
             total_input_tokens += input_tokens
 
-            prompt = self.CHUNK_SUMMARY_PROMPT.format(chunk_data=chunk_text)
+            # Include causal graph in chunk only if enabled AND not using grounded mode
+            skip_chunk_graph = self.separate_causal_graph or (self.ground_snomed and self.grounded_graph_mode)
+            include_chunk_graph = self.chunk_causal_graph and not skip_chunk_graph
+
+            prompt = self._build_chunk_prompt(
+                chunk_data=chunk_text,
+                time_period=f"{start}-{end}",
+                include_causal_graph=include_chunk_graph,
+            )
+            # System prompt for chunk summary structure
+            chunk_system = (
+                "You are a clinical documentation specialist. "
+                "You output period summaries in markdown format with exactly these headers: "
+                "# Subjective, # Objective, # Assessment, # Plan, # Summary. "
+                "Each section must start with its header on its own line."
+            )
             chunk_start_time = time.perf_counter()
-            summary = self._generate_text(prompt, max_new_tokens=self.max_new_tokens_chunk)
+            summary = self._generate_text(
+                prompt,
+                max_new_tokens=self.max_new_tokens_chunk,
+                system_prompt=chunk_system,
+            )
             chunk_seconds = time.perf_counter() - chunk_start_time
 
             # Count output tokens
@@ -4406,66 +4651,48 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         summaries_text = "\n\n".join(summaries)
         aggregate_input_tokens = self._count_tokens(summaries_text)
 
-        # Format genetics section for inclusion in hierarchical prompts
-        # (In direct mode, genetics is already in patient_text; in hierarchical mode, chunks don't include it)
-        genetics_section = ""
-        if hasattr(patient, 'genomics') and patient.genomics is not None:
-            try:
-                genetics_text, _ = FHIRFormatter._format_genomics(
-                    patient.genomics,
-                    use_biomcp=self.use_biomcp,
-                )
-                if genetics_text and genetics_text.strip():
-                    genetics_section = f"\n{genetics_text}\n"
-            except Exception:
-                pass  # Skip if genomics formatting fails
-
         # Select prompt based on whether images are present and graph generation mode
         # Skip inline causal graph if we'll generate grounded graph, or if separate_causal_graph is enabled
         skip_inline_graph = self.separate_causal_graph or (self.ground_snomed and self.grounded_graph_mode)
 
-        if skip_inline_graph:
-            # Use prompts without causal graph (grounded graph will be generated later)
-            if images:
-                aggregate_prompt = self.AGGREGATE_NO_GRAPH_WITH_IMAGES_PROMPT.format(
-                    patient_name=patient_name,
-                    summaries=summaries_text,
-                    genetics_section=genetics_section,
-                    num_images=len(images),
-                )
-            else:
-                aggregate_prompt = self.AGGREGATE_NO_GRAPH_PROMPT.format(
-                    patient_name=patient_name,
-                    summaries=summaries_text,
-                    genetics_section=genetics_section,
-                )
-        else:
-            # Use normal prompts with causal graph
-            if images:
-                aggregate_prompt = self.AGGREGATE_PROMPT_WITH_IMAGES.format(
-                    patient_name=patient_name,
-                    summaries=summaries_text,
-                    genetics_section=genetics_section,
-                    num_images=len(images),
-                )
-            else:
-                aggregate_prompt = self.AGGREGATE_PROMPT_NO_IMAGES.format(
-                    patient_name=patient_name,
-                    summaries=summaries_text,
-                    genetics_section=genetics_section,
-                )
+        # Build aggregate prompt with conditional sections
+        aggregate_prompt = self._build_aggregate_prompt(
+            patient_name=patient_name,
+            summaries_text=summaries_text,
+            include_images=bool(images),
+            num_images=len(images) if images else 0,
+            include_causal_graph=not skip_inline_graph,
+        )
 
         # Add admission exclusion instruction if needed (for inline causal graph mode)
         if not skip_inline_graph:
             aggregate_prompt += self._get_admission_exclusion_instruction()
+
+        # System prompt to enforce SOAP note structure
+        soap_system = (
+            "You are a clinical documentation specialist. "
+            "You output SOAP notes in markdown format with exactly these headers: "
+            "# Patient Story, # Subjective, # Objective, # Assessment, # Plan, # Future Considerations, # Summary. "
+            "Each section must start with its header on its own line."
+        )
 
         aggregate_start = time.perf_counter()
         response = self._generate_text(
             aggregate_prompt,
             images=images if images else None,
             max_new_tokens=self.max_new_tokens_final,
+            system_prompt=soap_system,
         )
         aggregate_seconds = time.perf_counter() - aggregate_start
+
+        # Fail immediately if response is empty
+        if not response or not response.strip():
+            raise RuntimeError(
+                f"Hierarchical SOAP generation returned empty response.\n"
+                f"  Patient: {patient.patient_id}\n"
+                f"  Chunks summarized: {len(summaries)}\n"
+                f"  max_new_tokens: {self.max_new_tokens_final}"
+            )
 
         # Count final output tokens
         final_output_tokens = self._count_tokens(response)
@@ -4488,10 +4715,15 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             graph_prompt = self.CAUSAL_GRAPH_PROMPT.format(soap_note=response)
             # Add admission exclusion instruction if needed
             graph_prompt += self._get_admission_exclusion_instruction()
+            graph_system = (
+                "You output ONLY causal relationships in the format: Cause[type] ARROW Effect[type]. "
+                "One relationship per line. No explanations, no prose, no commentary."
+            )
             graph_start = time.perf_counter()
             causal_graph_response = self._generate_text(
                 graph_prompt,
                 max_new_tokens=2000,
+                system_prompt=graph_system,
             )
             causal_graph_seconds = time.perf_counter() - graph_start
             causal_graph_tokens = self._count_tokens(causal_graph_response)
@@ -4503,8 +4735,7 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
             if pbar:
                 pbar.update(1)
         elif self.separate_causal_graph and skip_freeform_graph:
-            # Add placeholder - will be replaced with grounded graph
-            response = response.rstrip() + "\n\n# Causal Graph\n(Grounded causal graph will be generated using SNOMED CT concepts)"
+            # Grounded graph will be added later - don't add placeholder to raw response
             if pbar:
                 pbar.update(1)
 
@@ -4552,10 +4783,11 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
 
         if pbar:
             pbar.update(1)
-            pbar.close()
+            if internal_pbar:
+                pbar.close()
 
-        # Print comprehensive token statistics
-        if self.verbose:
+        # Print comprehensive token statistics (only if using internal pbar)
+        if self.verbose and internal_pbar:
             print(f"\n  Token Statistics Summary:")
             print(f"  ══════════════════════════════════════════════")
             print(f"  Time Segments: {len(chunks)}")
@@ -4683,6 +4915,11 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
         current_section = None
         current_content = []
 
+        debug_parse = isinstance(self.verbose, int) and self.verbose >= 2
+        if debug_parse:
+            print(f"    [PARSE DEBUG] Response length: {len(response)} chars")
+            print(f"    [PARSE DEBUG] Response preview: {response[:200]}...")
+
         for line in response.split("\n"):
             stripped = line.strip()
             line_upper = stripped.upper()
@@ -4694,28 +4931,53 @@ Note: Exclude "Hospital_Admissions" as a node in the causal graph. Do not create
                 continue
 
             # Remove markdown formatting for header detection
-            clean_upper = line_upper.lstrip("#").lstrip("*").lstrip("-").strip()
-            clean_upper = clean_upper.rstrip(":").rstrip("*").strip()
+            # Strip leading markdown chars (#, *, -) and trailing punctuation (*, :)
+            clean_upper = line_upper.lstrip("#*- \t").rstrip(":* \t")
 
             # Check for section headers
+            # Match if line equals alias exactly, or starts with alias followed by
+            # non-alphanumeric (space, colon, dash, etc.)
             found_section = None
             for alias, section in alias_to_section.items():
-                if clean_upper == alias or clean_upper.startswith(alias + " "):
+                if clean_upper == alias:
                     found_section = section
                     break
+                elif clean_upper.startswith(alias):
+                    # Check that next char (if any) is not alphanumeric
+                    # This prevents "PLANNING" from matching "PLAN"
+                    next_char_idx = len(alias)
+                    if next_char_idx >= len(clean_upper):
+                        found_section = section
+                        break
+                    next_char = clean_upper[next_char_idx]
+                    if not next_char.isalnum():
+                        found_section = section
+                        break
 
             if found_section:
                 # Save previous section
                 if current_section:
-                    sections[current_section] = "\n".join(current_content).strip()
+                    saved_content = "\n".join(current_content).strip()
+                    sections[current_section] = saved_content
+                    if debug_parse:
+                        print(f"    [PARSE DEBUG] Saved {current_section}: {len(saved_content)} chars")
                 current_section = found_section
                 current_content = []
+                if debug_parse:
+                    print(f"    [PARSE DEBUG] Found section: {found_section} (from line: {stripped[:50]})")
             elif current_section:
                 current_content.append(line)
 
         # Save last section
         if current_section:
-            sections[current_section] = "\n".join(current_content).strip()
+            saved_content = "\n".join(current_content).strip()
+            sections[current_section] = saved_content
+            if debug_parse:
+                print(f"    [PARSE DEBUG] Saved final {current_section}: {len(saved_content)} chars")
+
+        if debug_parse:
+            for sec_name, sec_content in sections.items():
+                print(f"    [PARSE DEBUG] Section {sec_name}: {len(sec_content)} chars")
 
         # If no sections found, try to use raw response as assessment
         if not any(sections.values()):
@@ -4748,9 +5010,10 @@ def generate_soap_note(
     model_id: str = "google/medgemma-1.5-4b-it",
     include_imaging: bool = True,
     quantization: Optional[str] = None,
-    verbose: bool = True,
+    verbose: Union[bool, int] = True,
     approximate_tokens: bool = False,
     use_biomcp: bool = False,
+    separate_genetics: bool = False,
     separate_causal_graph: bool = False,
     include_admissions: bool = False,
     chunk_period_years: Optional[int | str] = "auto",
@@ -4771,6 +5034,8 @@ def generate_soap_note(
         use_biomcp: Use BioMCP to enrich genetic variant annotations.
                     Requires: pip install biomcp-python
                     See: https://biomcp.org/
+        separate_genetics: If True, generate genetic summary in a separate LLM call.
+                    If False (default), include genetics inline in the SOAP note.
         separate_causal_graph: Generate causal graph in a separate prompt to avoid
                     token limits. Only generates for final SOAP, not chunks.
         include_admissions: Include Hospital Admissions in the causal graph.
@@ -4802,6 +5067,7 @@ def generate_soap_note(
         approximate_tokens=approximate_tokens,
         include_imaging=include_imaging,
         use_biomcp=use_biomcp,
+        separate_genetics=separate_genetics,
         separate_causal_graph=separate_causal_graph,
         include_admissions=include_admissions,
         chunk_period_years=chunk_period_years,

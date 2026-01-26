@@ -396,6 +396,170 @@ linker = sl.SNOMEDLinker()
 linker.build_index(concepts)
 ```
 
+---
+
+## New Features
+
+### Medical Acronym Expansion
+
+Clinical text is full of abbreviations that standard embedding models struggle with. SynthLab automatically expands 150+ common medical acronyms before matching:
+
+```python
+from synthlab.snomed import expand_medical_acronyms
+
+# Expands automatically during linking
+expand_medical_acronyms("HR")   # -> "heart rate"
+expand_medical_acronyms("BUN")  # -> "blood urea nitrogen"
+expand_medical_acronyms("HTN")  # -> "hypertension"
+expand_medical_acronyms("DM2")  # -> "type 2 diabetes mellitus"
+```
+
+**Categories covered:**
+
+| Category | Examples |
+|----------|----------|
+| **Vital signs** | HR, BP, RR, SpO2, BMI, Temp |
+| **Lab values** | BUN, Cr, eGFR, HbA1c, LDL, HDL, ALT, AST, WBC, Hgb |
+| **Conditions** | HTN, DM, CAD, CHF, COPD, CKD, MI, AFib, DVT, PE |
+| **Procedures** | EKG, CT, MRI, CABG, PCI, TKR, EGD |
+| **Medications** | ASA, NSAID, PPI, ACEi, ARB, BB, CCB, SSRI |
+| **Clinical terms** | Hx, PMH, PSH, FH, Dx, Tx, Rx, PRN, BID, PO, IV |
+
+Acronym expansion is enabled by default in `link()` and `link_batch_with_cache()`:
+
+```python
+linker = sl.SNOMEDLinker()
+linker.build_index(concepts)
+
+# Acronyms are automatically expanded before matching
+results = linker.link("HR", expand_acronyms=True)  # Searches for "heart rate"
+results = linker.link("elevated BUN")  # Searches for "elevated blood urea nitrogen"
+```
+
+### Adaptive Index Expansion
+
+The sample SNOMED index includes ~300 common clinical concepts, but clinical text often contains terms not in the index. SynthLab can **automatically look up missing concepts** from the SNOMED International browser API:
+
+```python
+# Enable auto-expansion to look up missing concepts
+results = linker.link_batch_with_cache(
+    ["chronic sinusitis", "memory recall", "HR"],
+    expand_acronyms=True,   # Expand "HR" -> "heart rate"
+    auto_expand=True,       # Look up missing concepts from SNOMED browser
+)
+```
+
+**How it works:**
+
+1. Attempt to match against the local index
+2. For low-confidence matches (score < 0.5), query the SNOMED browser API
+3. Add newly found concepts to the index
+4. Re-match to get improved results
+
+```
+┌─────────────────────┐
+│   Input: "HR"       │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Acronym Expansion   │
+│ "HR" → "heart rate" │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│  Search Local Index │
+│   Score < 0.5?      │
+└──────────┬──────────┘
+           │ Yes
+           ▼
+┌─────────────────────┐     ┌──────────────────┐
+│  SNOMED Browser API │────▶│ Found: 364075005 │
+│  lookup_snomed()    │     │ "Heart rate"     │
+└──────────┬──────────┘     └──────────────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Add to Local Index  │
+│ Re-match            │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Return Match:       │
+│ SCTID:364075005     │
+│ Score: 0.98         │
+└─────────────────────┘
+```
+
+### SNOMED Browser API Integration
+
+SynthLab can fetch concepts directly from the SNOMED International Snowstorm browser API (no authentication required):
+
+```python
+from synthlab.snomed import lookup_snomed_concept, fetch_snomed_from_browser
+
+# Look up a single concept
+concept = lookup_snomed_concept("chronic sinusitis")
+print(concept)  # SNOMEDConcept(concept_id='40055000', term='Chronic sinusitis', ...)
+
+# Download a comprehensive set of concepts (up to 50k)
+concepts = fetch_snomed_from_browser(
+    subset="core",    # "core", "findings", "procedures", or "substances"
+    verbose=True,
+)
+linker.build_index(concepts)
+```
+
+**Available subsets:**
+
+| Subset | ECL Query | Description |
+|--------|-----------|-------------|
+| `core` | `< 404684003 OR < 71388002 OR < 123037004` | Clinical findings + procedures + body structures |
+| `findings` | `< 404684003` | Clinical findings hierarchy |
+| `procedures` | `< 71388002` | Procedure hierarchy |
+| `substances` | `< 105590001` | Substance hierarchy |
+
+### Expanded Sample Concepts
+
+The built-in sample index now includes ~300 common clinical concepts across categories:
+
+| Category | Examples Added |
+|----------|----------------|
+| **ENT** | Chronic sinusitis, acute sinusitis, otitis media, tonsillitis, pharyngitis, epistaxis, tinnitus, hearing loss |
+| **Respiratory** | Dyspnea, shortness of breath, cough, sleep apnea, URI, allergic rhinitis, bronchitis |
+| **Lab findings** | Elevated creatinine, BUN, heart rate, blood pressure, hemoglobin, glucose |
+| **Vital signs** | Heart rate, respiratory rate, oxygen saturation, body temperature, BMI |
+| **Clinical observations** | ECG findings, edema, jaundice, fever, pain types, confusion, anxiety, insomnia |
+| **Allergies** | Drug allergy, penicillin allergy, sulfonamide allergy, latex allergy, food allergy |
+
+### EBI OLS MCP Integration (Optional)
+
+For broader ontology support beyond SNOMED CT, the [EBI Ontology Lookup Service](https://www.ebi.ac.uk/ols4/) provides an MCP server:
+
+```json
+{
+  "mcpServers": {
+    "ols-mcp-server": {
+      "command": "uv",
+      "args": ["tool", "run", "ols-mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+Supported ontologies include Gene Ontology (GO), Human Phenotype Ontology (HP), MONDO, ChEBI, and UBERON.
+
+**Note:** SNOMED CT has licensing restrictions, so EBI uses the [OxO service](https://www.ebi.ac.uk/spot/oxo/) for cross-ontology mapping.
+
+Resources:
+- [EBI OLS4 MCP](https://www.ebi.ac.uk/ols4/mcp)
+- [OLS MCP Server (GitHub)](https://github.com/seandavi/ols-mcp-server)
+
+---
+
 ### Two-Stage Pipeline (Recommended)
 
 For best accuracy, use the two-stage pipeline that combines LLM extraction with embedding-based linking:
@@ -449,32 +613,86 @@ for edge in grounded.edges:
 G = grounded.to_networkx()
 ```
 
-### Key Classes
+### Key Classes and Functions
 
-| Class | Description |
-|-------|-------------|
+| Class/Function | Description |
+|----------------|-------------|
 | `SNOMEDLinker` | Main linker class with `link()` and `link_batch()` methods |
 | `SNOMEDConcept` | A SNOMED concept with ID, term, and semantic type |
 | `SNOMEDMatch` | A match result with concept ID, term, and score |
 | `GroundedCausalGraph` | Causal graph with SNOMED-linked nodes |
 | `GroundedNode` | Node with SNOMED concept ID and confidence |
 | `GroundedEdge` | Edge between grounded nodes |
+| `expand_medical_acronyms()` | Expand medical abbreviations (HR → heart rate) |
+| `lookup_snomed_concept()` | Look up a single concept from SNOMED browser API |
+| `fetch_snomed_from_browser()` | Download concepts from SNOMED browser API |
+| `MEDICAL_ACRONYMS` | Dictionary of 150+ medical acronym expansions |
+
+### Two-Phase Workflow (Recommended)
+
+SNOMED entity linking uses a **two-phase architecture** for efficiency:
+
+**Phase 1: One-time index build** (offline, run once)
+```python
+import synthlab as sl
+
+# Build and cache embeddings for all SNOMED concepts
+# This takes 10-30 minutes but only needs to be done once
+sl.build_snomed_index(
+    "/path/to/CONCEPT.csv",  # OMOP format
+    index_name="snomed_full",  # Name for the cached index
+)
+```
+
+**Phase 2: Runtime queries** (fast, instant loading)
+```python
+# Load the pre-built index (takes seconds)
+linker = sl.load_snomed_linker()
+
+# Link terms - only embeds the query, searches cached index
+matches = linker.link("diabetes")
+```
+
+**List available indices:**
+```python
+sl.list_snomed_indices()
+# Cached SNOMED indices:
+#   snomed_full_sapbert: 350,000 concepts (450.2 MB)
+#   snomed_sapbert: 167 concepts (0.1 MB)
+```
 
 ### Loading SNOMED Data
 
+If you need to load concepts manually (for custom workflows):
+
 ```python
-# From UMLS (requires license)
+# Option 1: From OMOP CDM CONCEPT.csv (Recommended for full SNOMED)
+concepts = sl.load_snomed_from_omop(
+    "/path/to/CONCEPT.csv",
+    vocabulary_id="SNOMED",     # Filter for SNOMED vocabulary
+    standard_only=True,         # Only 'S' (standard) concepts
+    active_only=True,           # Only concepts without invalid_reason
+    domains=["Condition"],      # Optional: filter by domain
+)
+
+# Option 2: From SNOMED browser API (no license required, limited)
+concepts = sl.fetch_snomed_from_browser(subset="core")  # Up to 50k concepts
+
+# Option 3: From UMLS (requires license)
 concepts = sl.load_snomed_from_umls("/path/to/umls/META")
 
-# From CSV file
+# Option 4: From custom CSV file
 concepts = sl.load_snomed_from_csv(
     "snomed.csv",
     concept_id_col="concept_id",
     term_col="term",
 )
 
-# Sample concepts for testing (~200 common clinical terms)
+# Option 5: Sample concepts for testing (~200 common clinical terms)
 concepts = sl.get_sample_snomed_concepts()
+
+# Option 6: Single concept lookup via browser API
+concept = sl.lookup_snomed_concept("chronic sinusitis")
 ```
 
 ### Installation

@@ -90,11 +90,15 @@ from synthlab.soap import (
     SOAPNoteGenerator,
     generate_soap_note,
     FHIRFormatter,
+    test_biomcp_response,
+)
+
+# Causal graph classes (refactored to separate module)
+from synthlab.causal_graph import (
     CausalGraph,
     CausalEdge,
     CausalNode,
     parse_causal_graph,
-    NODE_TYPES,
     CAUSAL_EDGE_TYPES,
 )
 
@@ -111,15 +115,34 @@ from synthlab.snomed import (
     DocumentLinker,
     load_snomed_from_csv,
     load_snomed_from_umls,
+    load_snomed_from_omop,
+    # Index management (one-time build + fast loading)
+    build_snomed_index,
+    load_snomed_linker,
+    list_snomed_indices,
     get_snomed_cache_dir,
     get_snomed_info,
     print_snomed_info,
     get_sample_snomed_concepts,
     setup_sample_linker,
     create_entity_pipeline,
+    # Acronym expansion
+    expand_medical_acronyms,
+    MEDICAL_ACRONYMS,
+    # SNOMED browser API
+    fetch_snomed_from_browser,
+    lookup_snomed_concept,
+    # Constants
     SAPBERT_MODEL_ID,
     SAPBERT_MODELS,
     EMBEDDING_MODELS,
+)
+
+from synthlab.download_snomed import (
+    download_snomed_vocabulary,
+    get_concept_csv_path,
+    is_snomed_available,
+    get_snomed_data_dir,
 )
 
 from synthlab.coherent import (
@@ -283,12 +306,12 @@ __all__ = [
     "SOAPNoteGenerator",
     "generate_soap_note",
     "FHIRFormatter",
+    "test_biomcp_response",
     # Causal Graph Analysis
     "CausalGraph",
     "CausalEdge",
     "CausalNode",
     "parse_causal_graph",
-    "NODE_TYPES",
     "CAUSAL_EDGE_TYPES",
     # SNOMED Entity Linking
     "SNOMEDLinker",
@@ -303,6 +326,11 @@ __all__ = [
     "DocumentLinker",
     "load_snomed_from_csv",
     "load_snomed_from_umls",
+    "load_snomed_from_omop",
+    # Index management
+    "build_snomed_index",
+    "load_snomed_linker",
+    "list_snomed_indices",
     "get_snomed_cache_dir",
     "get_snomed_info",
     "print_snomed_info",
