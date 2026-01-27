@@ -86,6 +86,9 @@ Documentation = "https://github.com/yourusername/synthlab#readme"
 Repository = "https://github.com/yourusername/synthlab"
 Issues = "https://github.com/yourusername/synthlab/issues"
 
+[project.scripts]
+synthlab-agent = "synthlab.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["synthlab*"]

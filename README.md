@@ -89,6 +89,20 @@ pip install flash-attn --no-build-isolation
 - Matplotlib (plots)
 - Optional (imaging notebooks): pydicom
 
+## Agent-Friendly Workflow (Offline-Safe)
+
+Use the reproducible script runner (no data downloads):
+
+```bash
+scripts/run_codex_workflow.sh
+```
+
+CLI entry point:
+
+```bash
+synthlab-agent workflow --mcp-config configs/mcp.servers.json
+```
+
 ## Quick Start
 
 ### Synthea: Generate Synthetic Patient Data
