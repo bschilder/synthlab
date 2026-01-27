@@ -22,7 +22,7 @@ pip install -e ".[genomics]"  # NumPy for genotype generation
 pip install -e ".[aws]"       # S3 dataset downloads
 
 # Alternative: Use conda environment
-conda env create -f conda/synthlab.yml
+conda env create -f envs/environment.yml
 conda activate synthlab
 ```
 

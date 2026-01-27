@@ -7,8 +7,8 @@ This directory contains the conda environment configuration for SynthLab.
 To create the conda environment:
 
 ```bash
-cd /home/schilder/projects/synthlab
-conda env create -f conda/synthlab.yml
+cd /path/to/synthlab
+conda env create -f envs/environment.yml
 ```
 
 ## Activating the Environment
@@ -22,16 +22,16 @@ conda activate synthlab
 After activating the environment:
 
 ```bash
-cd /home/schilder/projects/synthlab
+cd /path/to/synthlab
 pip install -e .
 ```
 
 ## Updating the Environment
 
-If you modify `synthlab.yml`, update the environment with:
+If you modify `environment.yml`, update the environment with:
 
 ```bash
-conda env update -f conda/synthlab.yml --prune
+conda env update -f envs/environment.yml --prune
 ```
 
 ## Removing the Environment
