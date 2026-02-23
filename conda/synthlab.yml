@@ -14,6 +14,7 @@ dependencies:
   - ipywidgets
   - matplotlib
   - faiss-gpu>=1.7.0
+  - pytest
   - pip:
     - boto3>=1.26.0  # Optional: for AWS dataset download
     - requests>=2.28.0  # For UK Biobank Synthetic Dataset downloads

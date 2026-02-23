@@ -1,4 +1,4 @@
-# SynthLab
+![](img/synthlab_logo.png)
 
 Python tools for working with synthetic healthcare datasets.
 

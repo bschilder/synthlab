@@ -253,6 +253,56 @@ class SOAPNote:
 
         return "\n".join(lines)
 
+    def __repr__(self) -> str:
+        """Concise summary representation for debugging."""
+        def _preview(text: str, max_len: int = 60) -> str:
+            """Return truncated preview with char count."""
+            if not text:
+                return "(empty)"
+            text_clean = text.replace("\n", " ").strip()
+            if len(text_clean) <= max_len:
+                return f'"{text_clean}"'
+            return f'"{text_clean[:max_len]}..." ({len(text)} chars)'
+
+        lines = [
+            f"SOAPNote(",
+            f"  patient='{self.patient_name or self.patient_id}',",
+            f"  generated='{self.generated_at[:19]}',",
+            f"  model='{self.model_used}',",
+        ]
+
+        # Text sections with previews
+        sections = [
+            ("patient_story", self.patient_story),
+            ("subjective", self.subjective),
+            ("objective", self.objective),
+            ("assessment", self.assessment),
+            ("plan", self.plan),
+            ("genetic_summary", self.genetic_summary),
+        ]
+        for name, text in sections:
+            if text:
+                lines.append(f"  {name}={_preview(text)},")
+
+        # Counts for complex fields
+        if self.chunk_summaries:
+            lines.append(f"  chunk_summaries={len(self.chunk_summaries)} chunks,")
+        if self.biomcp_annotations:
+            n_variants = len(self.biomcp_annotations.get("variants", []))
+            lines.append(f"  biomcp_annotations={n_variants} variants,")
+        if self.grounded_causal_graph:
+            n_nodes = len(self.grounded_causal_graph.nodes)
+            n_edges = len(self.grounded_causal_graph.edges)
+            lines.append(f"  grounded_causal_graph={n_nodes} nodes, {n_edges} edges,")
+        elif self.causal_graph:
+            lines.append(f"  causal_graph={_preview(self.causal_graph)},")
+
+        # Metadata
+        lines.append(f"  images={self.images_analyzed}, periods={self.time_periods_summarized}")
+        lines.append(")")
+
+        return "\n".join(lines)
+
     def show_raw(self) -> str:
         """Return the raw model response for debugging."""
         return self.raw_response
