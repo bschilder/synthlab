@@ -1,26 +1,39 @@
-name: synthlab
+name: medagent
 channels:
+  - nvidia
+  - pytorch
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.8,<3.13
+  - python=3.10
   - pip
-  - pooch>=1.6.0
-  - pandas>=1.5.0
+  - pytorch
+  - pytorch-cuda=12.1
+  - torchvision
+  - pandas>=2.0
   - polars>=0.19.0
+  - matplotlib>=3.7
   - jupyter
   - notebook
   - ipykernel
   - ipywidgets
-  - matplotlib
+  - pytest
+  - streamlit
   - faiss-gpu>=1.7.0
   - pip:
-    - boto3>=1.26.0  # Optional: for AWS dataset download
-    - requests>=2.28.0  # For UK Biobank Synthetic Dataset downloads
-    - tiktoken>=0.6.0
-    - torch
-    - torchvision
-    - transformers>=4.50.0
-    - accelerate
-    - bitsandbytes
-    - biomcp-python
+      - pooch>=1.6.0
+      - boto3>=1.26.0
+      - requests>=2.28.0
+      - tiktoken>=0.6.0
+      - transformers>=4.50.0
+      - accelerate>=0.28
+      - bitsandbytes
+      - sentence-transformers
+      - huggingface_hub>=0.23
+      - safetensors>=0.4
+      - pydicom>=2.4
+      - pillow>=10.0
+      - python-dotenv
+      - litellm
+      - pyarrow
+      - biomcp-python

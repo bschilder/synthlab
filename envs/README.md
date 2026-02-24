@@ -14,7 +14,7 @@ conda env create -f envs/environment.yml
 ## Activating the Environment
 
 ```bash
-conda activate synthlab
+conda activate medagent
 ```
 
 ## Installing SynthLab in Development Mode
@@ -37,5 +37,5 @@ conda env update -f envs/environment.yml --prune
 ## Removing the Environment
 
 ```bash
-conda env remove -n synthlab
+conda env remove -n medagent
 ```
