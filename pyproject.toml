@@ -67,6 +67,16 @@ visualization = [
     "pyvis>=0.3.0",
     "networkx>=2.8.0",
 ]
+meds = [
+    # Medical Event Data Standard ETL (OMOP / MIMIC-IV → MEDS parquet).
+    # https://github.com/Medical-Event-Data-Standard/meds_etl
+    "meds_etl>=0.3",
+    "meds>=0.4",
+]
+tests = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
 all = [
     "boto3>=1.26.0",
     "numpy>=1.20.0",
@@ -78,6 +88,8 @@ all = [
     "faiss-gpu>=1.7.0",
     "pyvis>=0.3.0",
     "networkx>=2.8.0",
+    "meds_etl>=0.3",
+    "meds>=0.4",
 ]
 
 [project.urls]
