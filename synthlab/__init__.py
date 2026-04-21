@@ -145,6 +145,16 @@ from synthlab.download_snomed import (
     get_snomed_data_dir,
 )
 
+# MEDS (Medical Event Data Standard) conversion for ML-native EHR inputs
+from synthlab.meds import (
+    MedsConvertConfig,
+    convert_omop_to_meds,
+    load_meds_events,
+    get_meds_cache_dir,
+    get_meds_info,
+    print_meds_info,
+)
+
 from synthlab.coherent import (
     list_coherent_components,
     list_coherent_files,
@@ -340,4 +350,11 @@ __all__ = [
     "SAPBERT_MODEL_ID",
     "SAPBERT_MODELS",
     "EMBEDDING_MODELS",
+    # MEDS conversion
+    "MedsConvertConfig",
+    "convert_omop_to_meds",
+    "load_meds_events",
+    "get_meds_cache_dir",
+    "get_meds_info",
+    "print_meds_info",
 ]

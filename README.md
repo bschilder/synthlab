@@ -40,6 +40,25 @@ SynthLab provides Python interfaces for working with major synthetic healthcare 
 - **Access Information**: Clear documentation of open vs. registration-required datasets
 - **Download Utilities**: Helpers for downloading select open-access datasets
 
+### MEDS (Medical Event Data Standard) conversion (NEW)
+Plug synthetic EHR into ML-native foundation models. Provides a thin,
+well-tested wrapper over the community [`meds_etl`](https://github.com/Medical-Event-Data-Standard/meds_etl)
+package so OMOP CSVs (produced by `synthlab.synthea.convert_synthea_to_omop`)
+become MEDS parquet shards ready for models like
+[SMB-v1](https://huggingface.co/standardmodelbio) or MOTOR:
+
+```python
+from synthlab.meds import MedsConvertConfig, convert_omop_to_meds, load_meds_events
+
+convert_omop_to_meds(MedsConvertConfig(
+    omop_dir="~/.cache/synthlab/synthea/omop_100",
+    meds_dir="~/.cache/synthlab/meds/synthea_100",
+))
+df = load_meds_events("~/.cache/synthlab/meds/synthea_100")
+```
+
+Install the optional extra: `pip install synthlab[meds]`.
+
 ## Installation
 
 ```bash
