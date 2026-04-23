@@ -27,6 +27,7 @@ realistic PEA dilution noise model are deferred to a follow-up.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
 
@@ -40,7 +41,21 @@ __all__ = [
     "default_explore_3072_panel",
     "write_olink_parquet",
     "load_olink_parquet",
+    "DiseaseEffectCatalog",
+    "load_disease_effect_catalog",
 ]
+
+# Columns every disease-effects catalog CSV must provide. Any extra columns
+# are preserved untouched (useful for meta-notes / study-design tags).
+_CATALOG_REQUIRED_COLUMNS: tuple[str, ...] = (
+    "disease",
+    "protein_uniprot",
+    "delta_npx",
+    "se_delta",
+    "source",
+    "doi",
+    "evidence_strength",
+)
 
 # 50 protein symbols drawn from UKB-PPP Explore 3072 — illustrative mix of
 # inflammation / cardiovascular / oncology markers. Downstream users should
@@ -397,3 +412,276 @@ def load_olink_parquet(path: str | Path) -> pl.DataFrame:
             f"Found: {df.columns}."
         )
     return df
+
+
+# ---------------------------------------------------------------------------
+# Disease-effect catalog — curated per-disease protein NPX shifts
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DiseaseEffectCatalog:
+    """Curated per-disease protein effect sizes from published Olink / plasma
+    proteomics literature.
+
+    Loaded from the bundled
+    [`synthlab/data/olink_disease_effects.csv`](../data/olink_disease_effects.csv)
+    (or a user-supplied CSV with the same schema). Effects are **log2 NPX-unit
+    mean shifts** of cases vs a demographically-matched baseline; ``se_delta``
+    reflects between-study / between-cohort variability. Every row is
+    annotated with a ``source`` label and a real DOI — see the CSV itself for
+    citation-level sourcing of every estimate.
+
+    The catalog plugs directly into :func:`simulate_olink_npx` via
+    :meth:`effects_for` — see the Examples. Row schema is validated on
+    construction (``disease``, ``protein_uniprot``, ``delta_npx``,
+    ``se_delta``, ``source``, ``doi``, ``evidence_strength``).
+
+    Parameters
+    ----------
+    effects : polars.DataFrame
+        The loaded catalog as a polars frame. Must contain every column
+        listed in ``_CATALOG_REQUIRED_COLUMNS``; extra columns (e.g. the
+        bundled ``meta`` notes column) are preserved unmodified.
+
+    Examples
+    --------
+    Load the bundled catalog and feed it into the simulator:
+
+    >>> from synthlab import (
+    ...     OlinkSimConfig,
+    ...     default_explore_3072_panel,
+    ...     load_disease_effect_catalog,
+    ...     simulate_olink_npx,
+    ... )
+    >>> cat = load_disease_effect_catalog()
+    >>> effects = cat.effects_for(["T2D", "CAD"])
+    >>> cfg = OlinkSimConfig(
+    ...     n_samples=10,
+    ...     panel=default_explore_3072_panel(),
+    ...     group_effects=effects,
+    ...     group_assignments=["T2D"] * 5 + ["baseline"] * 5,
+    ...     seed=42,
+    ... )
+    >>> df = simulate_olink_npx(cfg)
+    >>> sorted(df.columns)
+    ['group', 'npx', 'plate_id', 'protein_id', 'qc_warning', 'sample_id']
+    """
+
+    effects: pl.DataFrame
+
+    def __post_init__(self) -> None:
+        """Validate required columns + dtypes on construction.
+
+        Raises
+        ------
+        ValueError
+            If any required column is missing, or if ``delta_npx`` /
+            ``se_delta`` are not castable to floats.
+        """
+        missing = [c for c in _CATALOG_REQUIRED_COLUMNS if c not in self.effects.columns]
+        if missing:
+            raise ValueError(
+                f"DiseaseEffectCatalog is missing required columns: {missing}. "
+                f"Found: {self.effects.columns}."
+            )
+        for col in ("delta_npx", "se_delta"):
+            if not self.effects[col].dtype.is_numeric():
+                raise ValueError(
+                    f"DiseaseEffectCatalog column {col!r} must be numeric; "
+                    f"got dtype={self.effects[col].dtype}."
+                )
+
+    def diseases(self) -> tuple[str, ...]:
+        """Return the sorted list of registered disease labels.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Unique disease labels from the ``disease`` column, sorted
+            alphabetically. Useful for populating dropdowns / docs.
+
+        Examples
+        --------
+        >>> from synthlab import load_disease_effect_catalog
+        >>> cat = load_disease_effect_catalog()
+        >>> "T2D" in cat.diseases()
+        True
+        """
+        return tuple(sorted(self.effects["disease"].unique().to_list()))
+
+    def proteins_for(self, disease: str) -> tuple[str, ...]:
+        """Return the proteins with non-zero effects in ``disease``.
+
+        Parameters
+        ----------
+        disease : str
+            Disease label, e.g. ``"T2D"``. Must be a member of
+            :meth:`diseases`; a ``KeyError`` is raised otherwise.
+
+        Returns
+        -------
+        tuple[str, ...]
+            Protein UniProt / gene-symbol IDs with ``|delta_npx| > 0`` for
+            the requested disease, in the CSV's row order. Rows with
+            exactly-zero ``delta_npx`` (e.g. null-hypothesis placeholder
+            rows) are omitted.
+
+        Raises
+        ------
+        KeyError
+            If ``disease`` is not present in the catalog.
+
+        Examples
+        --------
+        >>> from synthlab import load_disease_effect_catalog
+        >>> cat = load_disease_effect_catalog()
+        >>> "CRP" in cat.proteins_for("IBD")
+        True
+        """
+        if disease not in self.effects["disease"].unique().to_list():
+            raise KeyError(
+                f"Disease {disease!r} not in catalog. Registered: {self.diseases()}."
+            )
+        sub = self.effects.filter(
+            (pl.col("disease") == disease) & (pl.col("delta_npx").abs() > 0.0)
+        )
+        return tuple(sub["protein_uniprot"].to_list())
+
+    def effects_for(
+        self,
+        diseases: Sequence[str],
+        *,
+        noise_sd: float = 0.0,
+        seed: int = 0,
+    ) -> Mapping[str, Mapping[str, float]]:
+        """Return a ``{protein_uniprot: {disease: delta_npx}}`` mapping.
+
+        The returned mapping plugs directly into
+        :attr:`OlinkSimConfig.group_effects`, which expects the exact shape
+        ``{protein: {group_label: delta_npx}}``. Each ``disease`` label in
+        ``diseases`` is treated as a group label at the simulator layer.
+
+        Parameters
+        ----------
+        diseases : Sequence[str]
+            One or more disease labels; each must be present in
+            :meth:`diseases`. A ``KeyError`` is raised for unknowns.
+        noise_sd : float, default 0.0
+            If ``> 0``, add Gaussian noise ``N(0, (noise_sd * se_delta)^2)``
+            to every delta — useful for Monte-Carlo ablations over
+            effect-size uncertainty. ``0.0`` returns the catalog's point
+            estimates verbatim.
+        seed : int, default 0
+            NumPy RNG seed. Only consulted when ``noise_sd > 0``.
+
+        Returns
+        -------
+        Mapping[str, Mapping[str, float]]
+            Keys are protein IDs that have *any* non-zero effect in the
+            requested diseases; values map each disease label to its
+            (possibly noise-perturbed) delta-NPX. Proteins present in the
+            CSV with ``delta_npx == 0`` are omitted from the output so
+            that :func:`simulate_olink_npx` skips them in its inner loop.
+
+        Raises
+        ------
+        KeyError
+            If any element of ``diseases`` is not in the catalog.
+        ValueError
+            If ``noise_sd < 0``.
+
+        Examples
+        --------
+        >>> from synthlab import load_disease_effect_catalog
+        >>> cat = load_disease_effect_catalog()
+        >>> eff = cat.effects_for(["T2D"])
+        >>> "CRP" in eff and "T2D" in eff["CRP"]
+        True
+        """
+        if noise_sd < 0:
+            raise ValueError(f"noise_sd must be >= 0; got {noise_sd}.")
+        registered = set(self.diseases())
+        unknown = [d for d in diseases if d not in registered]
+        if unknown:
+            raise KeyError(
+                f"Unknown disease labels: {unknown}. "
+                f"Registered: {sorted(registered)}."
+            )
+        sub = self.effects.filter(
+            pl.col("disease").is_in(list(diseases))
+            & (pl.col("delta_npx").abs() > 0.0)
+        )
+        # Draw per-row noise (only used when noise_sd > 0). Draw in the
+        # CSV's row order for reproducibility.
+        if noise_sd > 0:
+            rng = np.random.default_rng(seed)
+            ses = sub["se_delta"].to_numpy()
+            noise = rng.normal(0.0, noise_sd * ses)
+        else:
+            noise = np.zeros(sub.height, dtype=float)
+        out: dict[str, dict[str, float]] = {}
+        proteins = sub["protein_uniprot"].to_list()
+        dlist = sub["disease"].to_list()
+        deltas = sub["delta_npx"].to_numpy().astype(float)
+        for prot, disease, delta, noise_val in zip(proteins, dlist, deltas, noise):
+            out.setdefault(prot, {})[disease] = float(delta + noise_val)
+        return out
+
+
+def load_disease_effect_catalog(
+    path: str | Path | None = None,
+) -> DiseaseEffectCatalog:
+    """Load the curated per-disease Olink effect-size catalog.
+
+    Reads the bundled
+    [`synthlab/data/olink_disease_effects.csv`](../data/olink_disease_effects.csv)
+    (or a user-supplied CSV with the same schema) and wraps it in a
+    :class:`DiseaseEffectCatalog`. Every bundled row cites a real DOI —
+    see the CSV for sourcing.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path, optional
+        Override CSV path. If ``None`` (the default), the bundled catalog
+        is loaded via :mod:`importlib.resources` — this works inside
+        installed wheels without requiring any download.
+
+    Returns
+    -------
+    DiseaseEffectCatalog
+        Frozen dataclass wrapping the loaded polars frame.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``path`` is supplied but does not exist.
+    ValueError
+        Propagated from :class:`DiseaseEffectCatalog` if the CSV schema is
+        invalid.
+
+    Examples
+    --------
+    Default load (bundled CSV):
+
+    >>> from synthlab import load_disease_effect_catalog
+    >>> cat = load_disease_effect_catalog()
+    >>> len(cat.diseases()) >= 6
+    True
+
+    User-supplied override:
+
+    >>> # cat = load_disease_effect_catalog("my_custom_catalog.csv")
+    """
+    if path is None:
+        # Ship-in-wheel path via importlib.resources — works regardless of
+        # install location (editable, wheel, zip-app).
+        src = resources.files("synthlab.data").joinpath("olink_disease_effects.csv")
+        with resources.as_file(src) as csv_path:
+            df = pl.read_csv(csv_path)
+    else:
+        p = Path(path).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"Disease-effect catalog not found: {p}")
+        df = pl.read_csv(p)
+    return DiseaseEffectCatalog(effects=df)
