@@ -1,0 +1,44 @@
+disease,protein_uniprot,delta_npx,se_delta,source,doi,evidence_strength,meta
+T2D,IGFBP2,-0.45,0.18,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,largest-N pQTL + phenome-wide association for T2D
+T2D,LEP,0.80,0.25,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,leptin rises with adiposity + insulin resistance
+T2D,ADIPOQ,-0.60,0.20,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,adiponectin consistently reduced in T2D across cohorts
+T2D,IGFBP1,-0.70,0.30,"Sun et al. 2018 INTERVAL (N=3,301) Nature",10.1038/s41586-018-0175-2,moderate,IGFBP1 suppressed by hyperinsulinemia
+T2D,IL6,0.30,0.20,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,moderate,low-grade inflammation in T2D
+T2D,CRP,0.35,0.20,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,chronic inflammation biomarker
+T2D,GDF15,0.55,0.22,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,mitochondrial stress + metformin interaction
+T2D,TNF,0.20,0.25,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,moderate,mild elevation in metabolic inflammation
+CAD,NPPB,0.55,0.30,"Eldjarn et al. 2023 deCODE (N=35,559) Nature",10.1038/s41586-023-06563-x,strong,BNP/NT-proBNP elevated with myocardial strain
+CAD,TNNI3,0.45,0.30,"Williams et al. 2022 Sci Transl Med",10.1126/scitranslmed.abj9625,moderate,troponin I elevated in subclinical CAD
+CAD,GDF15,0.70,0.25,"Williams et al. 2022 Sci Transl Med",10.1126/scitranslmed.abj9625,strong,GDF15 robust CV risk biomarker
+CAD,MMP12,0.50,0.25,"Eldjarn et al. 2023 deCODE (N=35,559) Nature",10.1038/s41586-023-06563-x,strong,MMP12 MR-supported causal CAD locus
+CAD,IL6,0.35,0.20,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,IL6 MR-causal for CAD
+CAD,CRP,0.40,0.20,"Sun et al. 2023 UKB-PPP (N=54,219) Nature",10.1038/s41586-023-06592-6,strong,atherosclerotic inflammation
+CAD,FABP4,0.40,0.25,"Williams et al. 2022 Sci Transl Med",10.1126/scitranslmed.abj9625,moderate,adipocyte-macrophage crosstalk in plaque
+Cancer_broad,MUC16,1.20,0.50,"Cohen et al. 2018 CancerSEEK Science",10.1126/science.aar3247,moderate,CA-125 elevated across ovarian + some epithelial tumours
+Cancer_broad,CEACAM5,1.00,0.45,"Cohen et al. 2018 CancerSEEK Science",10.1126/science.aar3247,moderate,CEA elevated in colorectal + other adenocarcinomas
+Cancer_broad,GDF15,0.80,0.30,"Cohen et al. 2018 CancerSEEK Science",10.1126/science.aar3247,strong,GDF15 pan-cancer tumour-burden marker
+Cancer_broad,IL6,0.60,0.25,"Cohen et al. 2018 CancerSEEK Science",10.1126/science.aar3247,moderate,tumour-associated cytokine
+Cancer_broad,CRP,0.50,0.25,"Cohen et al. 2018 CancerSEEK Science",10.1126/science.aar3247,moderate,systemic inflammatory response to tumour
+Cancer_broad,KRT19,0.70,0.35,"Cohen et al. 2018 CancerSEEK Science",10.1126/science.aar3247,moderate,CYFRA 21-1 elevated in epithelial tumours
+BRCA_hereditary,MUC16,0.05,0.30,"Ahn et al. 2021 Cancers",10.3390/cancers13102300,weak,no pre-clinical circulating MUC16 signal in BRCA carriers
+BRCA_hereditary,IL6,0.05,0.30,"Ahn et al. 2021 Cancers",10.3390/cancers13102300,weak,null-hypothesis placeholder; no replicated signal in BRCA carriers
+BRCA_hereditary,CRP,0.10,0.30,"Ahn et al. 2021 Cancers",10.3390/cancers13102300,weak,null-hypothesis placeholder; no replicated signal
+BRCA_hereditary,CEACAM5,0.00,0.30,"Ahn et al. 2021 Cancers",10.3390/cancers13102300,weak,null-hypothesis placeholder; no replicated signal
+Alzheimer,NEFL,0.90,0.30,"Guo et al. 2024 Nat Aging UKB (N=52,645)",10.1038/s43587-023-00565-0,strong,neurofilament light plasma pre-clinical dementia biomarker
+Alzheimer,GFAP,0.70,0.28,"Guo et al. 2024 Nat Aging UKB (N=52,645)",10.1038/s43587-023-00565-0,strong,astrogliosis marker rising >10y before AD dx
+Alzheimer,CHIT1,0.60,0.30,"Guo et al. 2024 Nat Aging UKB (N=52,645)",10.1038/s43587-023-00565-0,moderate,microglial chitotriosidase in neurodegeneration
+Alzheimer,GDF15,0.45,0.25,"Guo et al. 2024 Nat Aging UKB (N=52,645)",10.1038/s43587-023-00565-0,moderate,chronic stress biomarker in neurodegeneration
+Alzheimer,CRP,0.15,0.25,"Guo et al. 2024 Nat Aging UKB (N=52,645)",10.1038/s43587-023-00565-0,moderate,mild systemic inflammation in AD
+CKD,GDF15,0.85,0.25,"Dubin et al. 2023 Nat Comm CRIC (N=3,235)",10.1038/s41467-023-41642-7,strong,GDF15 rises monotonically with eGFR decline
+CKD,REN,0.70,0.30,"Dubin et al. 2023 Nat Comm CRIC (N=3,235)",10.1038/s41467-023-41642-7,strong,renin-angiotensin activation in CKD
+CKD,TFF3,0.75,0.30,"Dubin et al. 2023 Nat Comm CRIC (N=3,235)",10.1038/s41467-023-41642-7,moderate,tubular injury biomarker
+CKD,CST3,1.00,0.25,"Dubin et al. 2023 Nat Comm CRIC (N=3,235)",10.1038/s41467-023-41642-7,strong,cystatin C directly filtered by kidneys
+CKD,SPP1,0.55,0.28,"Dubin et al. 2023 Nat Comm CRIC (N=3,235)",10.1038/s41467-023-41642-7,moderate,osteopontin in tubular stress
+CKD,CRP,0.35,0.25,"Dubin et al. 2023 Nat Comm CRIC (N=3,235)",10.1038/s41467-023-41642-7,moderate,uremic chronic inflammation
+IBD,CRP,0.80,0.25,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,strong,CRP is clinical gold-standard for IBD activity
+IBD,IL6,0.60,0.25,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,strong,IL6 pathway central to IBD pathogenesis
+IBD,MMP9,0.55,0.25,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,moderate,MMP9 elevated with mucosal inflammation
+IBD,LRG1,0.70,0.30,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,moderate,LRG1 alternative activity biomarker
+IBD,S100A8,0.90,0.30,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,strong,calprotectin subunit A; faecal + plasma
+IBD,S100A9,0.90,0.30,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,strong,calprotectin subunit B; faecal + plasma
+IBD,TNF,0.45,0.25,"Hu et al. 2025 Nat Comm UKB-PPP (N=48,800)",10.1038/s41467-025-57879-3,strong,TNF is validated therapeutic target

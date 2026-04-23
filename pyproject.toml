@@ -110,7 +110,7 @@ where = ["."]
 include = ["synthlab*"]
 
 [tool.setuptools.package-data]
-synthlab = ["py.typed"]
+synthlab = ["py.typed", "data/*.csv"]
 
 [tool.black]
 line-length = 100

@@ -446,13 +446,210 @@ print(f"size : {tmp.stat().st_size // 1024} KB")
 print(f"rows : {round_trip.height:,}")
 """))
 
-    # === Section 10 — Where to next ======================================
+    # === Section 10 — Disease-conditional generation =====================
     cells.append(_md("""
-## 10. Where to next
+## 10. Disease-conditional generation
 
-The simulator is deliberately minimal — the scope of this PR (see [PR
-#2](https://github.com/bschilder/synthlab/pull/2)) is "smallest viable NPX
-simulator with LOD + plates + group effects". Follow-up work:
+So far we've hand-picked the three biomarkers (CRP, IL6, TNF) and their
+effect sizes. In practice users want to **reuse published, source-cited
+effect sizes** per disease — exactly what
+[`synthlab.load_disease_effect_catalog`](../synthlab/olink.py) exposes.
+
+The bundled CSV
+[`synthlab/data/olink_disease_effects.csv`](../synthlab/data/olink_disease_effects.csv)
+captures per-disease protein log2-NPX shifts from published plasma-proteomics
+studies — each row cites a real DOI. Coverage at PR-time (see [PR
+#TODO](https://github.com/bschilder/synthlab/pulls)):
+
+- **T2D**: 8 proteins — [Sun et al. 2023 UKB-PPP](https://doi.org/10.1038/s41586-023-06592-6)
+- **CAD**: 7 proteins — [Williams et al. 2022 Sci Transl Med](https://doi.org/10.1126/scitranslmed.abj9625) + [Eldjarn et al. 2023 deCODE](https://doi.org/10.1038/s41586-023-06563-x)
+- **Cancer (broad)**: 6 proteins — [Cohen et al. 2018 CancerSEEK](https://doi.org/10.1126/science.aar3247)
+- **BRCA hereditary**: 4 proteins, null-hypothesis placeholders from [Ahn et al. 2021](https://doi.org/10.3390/cancers13102300)
+- **Alzheimer's**: 5 proteins — [Guo et al. 2024 Nat Aging](https://doi.org/10.1038/s43587-023-00565-0)
+- **CKD**: 6 proteins — [Dubin et al. 2023 Nat Comm](https://doi.org/10.1038/s41467-023-41642-7)
+- **IBD**: 7 proteins — [Hu et al. 2025 Nat Comm UKB-PPP](https://doi.org/10.1038/s41467-025-57879-3)
+
+Load the catalog and inspect what's available:
+"""))
+
+    cells.append(_code("""
+from synthlab import load_disease_effect_catalog
+
+catalog = load_disease_effect_catalog()
+print(f"registered diseases ({len(catalog.diseases())}):")
+for d in catalog.diseases():
+    n = len(catalog.proteins_for(d))
+    print(f"  {d:<18s} -> {n} proteins")
+"""))
+
+    cells.append(_code("""
+# Peek at the raw catalog rows for T2D.
+catalog.effects.filter(pl.col("disease") == "T2D").select(
+    ["protein_uniprot", "delta_npx", "se_delta", "evidence_strength", "source"]
+)
+"""))
+
+    cells.append(_md("""
+### 10.1 3-group cohort (T2D / CAD / baseline) using catalog effects
+
+We'll simulate 300 subjects per group. The panel is a uniform 5.0-NPX
+baseline covering every catalog protein; LOD is set far below baseline so
+we can cleanly recover the injected means.
+"""))
+
+    cells.append(_code("""
+from synthlab import OlinkPanelConfig
+from synthlab import simulate_olink_npx
+
+# Build a panel from all proteins referenced in the catalog.
+catalog_proteins = tuple(catalog.effects["protein_uniprot"].unique().to_list())
+disease_panel = OlinkPanelConfig(
+    name="disease_catalog_panel",
+    proteins=catalog_proteins,
+    mean={p: 5.0 for p in catalog_proteins},
+    sd={p: 0.5 for p in catalog_proteins},
+    lod={p: -1000.0 for p in catalog_proteins},  # disable LOD drop for clean recovery
+)
+effects = catalog.effects_for(["T2D", "CAD"])
+
+N_PER = 300
+assignments = ["T2D"] * N_PER + ["CAD"] * N_PER + ["baseline"] * N_PER
+cfg = OlinkSimConfig(
+    n_samples=len(assignments),
+    panel=disease_panel,
+    group_effects=effects,
+    group_assignments=assignments,
+    missingness="none",
+    qc_warn_rate=0.0,
+    plate_effect_sd=0.0,
+    seed=RNG_SEED,
+)
+df_catalog = simulate_olink_npx(cfg)
+print(f"rows      : {df_catalog.height:,}")
+print(f"groups    : {df_catalog['group'].value_counts().to_dict(as_series=False)}")
+print(f"proteins  : {len(catalog_proteins)}")
+"""))
+
+    cells.append(_md("""
+### 10.2 Top-5 per-disease delta NPX — catalog vs empirical
+
+Grouped bar chart: for each disease, show the top-5 absolute delta-NPX
+proteins according to the catalog, side-by-side with the empirical case -
+baseline mean shift from the simulation.
+"""))
+
+    cells.append(_code("""
+# Catalog top-5 deltas per disease (absolute magnitude).
+top5_records = []
+for dname in ["T2D", "CAD"]:
+    rows = (
+        catalog.effects.filter(pl.col("disease") == dname)
+        .sort(pl.col("delta_npx").abs(), descending=True)
+        .head(5)
+    )
+    for r in rows.iter_rows(named=True):
+        prot = r["protein_uniprot"]
+        # empirical delta from simulation
+        case_mean = df_catalog.filter(
+            (pl.col("protein_id") == prot) & (pl.col("group") == dname)
+        )["npx"].mean()
+        base_mean = df_catalog.filter(
+            (pl.col("protein_id") == prot) & (pl.col("group") == "baseline")
+        )["npx"].mean()
+        top5_records.append({
+            "disease": dname,
+            "protein": prot,
+            "catalog_delta": float(r["delta_npx"]),
+            "empirical_delta": float(case_mean - base_mean),
+        })
+top5_df = pl.DataFrame(top5_records)
+top5_df
+"""))
+
+    cells.append(_code("""
+import pandas as pd
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
+for ax, dname in zip(axes, ["T2D", "CAD"]):
+    sub = top5_df.filter(pl.col("disease") == dname).to_pandas()
+    x = np.arange(len(sub))
+    width = 0.38
+    ax.bar(x - width / 2, sub["catalog_delta"], width,
+           label="catalog", color=sns.color_palette("colorblind")[0])
+    ax.bar(x + width / 2, sub["empirical_delta"], width,
+           label="empirical", color=sns.color_palette("colorblind")[1])
+    ax.set_xticks(x)
+    ax.set_xticklabels(sub["protein"], rotation=30, ha="right")
+    ax.axhline(0, color="black", linewidth=0.5)
+    ax.set_title(f"{dname} — top-5 absolute catalog delta-NPX")
+    ax.set_ylabel("delta NPX (case - baseline)")
+    ax.legend()
+fig.tight_layout()
+plt.show()
+"""))
+
+    cells.append(_md("""
+### 10.3 Catalog-vs-empirical consistency check
+
+Scatter of catalog delta vs empirical simulation delta across every
+(disease, protein) row used. Points should hug the identity line (y = x);
+deviations reflect Monte-Carlo sampling noise at 300 samples per group.
+"""))
+
+    cells.append(_code("""
+records = []
+for r in catalog.effects.filter(pl.col("disease").is_in(["T2D", "CAD"])).iter_rows(
+    named=True
+):
+    dname = r["disease"]
+    prot = r["protein_uniprot"]
+    expected = float(r["delta_npx"])
+    if expected == 0.0:
+        continue
+    case_mean = df_catalog.filter(
+        (pl.col("protein_id") == prot) & (pl.col("group") == dname)
+    )["npx"].mean()
+    base_mean = df_catalog.filter(
+        (pl.col("protein_id") == prot) & (pl.col("group") == "baseline")
+    )["npx"].mean()
+    records.append({"disease": dname, "protein": prot,
+                    "catalog_delta": expected,
+                    "empirical_delta": float(case_mean - base_mean)})
+consistency = pl.DataFrame(records)
+
+fig, ax = plt.subplots(figsize=(7, 7))
+palette = dict(zip(["T2D", "CAD"], sns.color_palette("colorblind", 2)))
+for dname, color in palette.items():
+    sub = consistency.filter(pl.col("disease") == dname).to_pandas()
+    ax.scatter(sub["catalog_delta"], sub["empirical_delta"],
+               s=70, color=color, edgecolor="k", linewidth=0.4,
+               label=dname)
+    for _, row in sub.iterrows():
+        ax.annotate(row["protein"], (row["catalog_delta"], row["empirical_delta"]),
+                    xytext=(5, 4), textcoords="offset points", fontsize=8)
+lo = float(consistency.select(pl.col("catalog_delta").min(),
+                               pl.col("empirical_delta").min())
+                      .min_horizontal()[0]) - 0.15
+hi = float(consistency.select(pl.col("catalog_delta").max(),
+                               pl.col("empirical_delta").max())
+                      .max_horizontal()[0]) + 0.15
+ax.plot([lo, hi], [lo, hi], "k--", linewidth=1, alpha=0.5, label="y = x")
+ax.set_xlabel("catalog delta NPX")
+ax.set_ylabel("empirical delta NPX (case - baseline)")
+ax.set_title("Catalog-vs-empirical consistency (300 subjects / group)")
+ax.legend()
+fig.tight_layout()
+plt.show()
+"""))
+
+    # === Section 11 — Where to next ======================================
+    cells.append(_md("""
+## 11. Where to next
+
+The simulator is deliberately minimal — the scope of [PR
+#2](https://github.com/bschilder/synthlab/pull/2) is "smallest viable NPX
+simulator with LOD + plates + group effects" and the follow-up adds a
+curated effect-size catalog. Remaining roadmap:
 
 - **Full MAR missingness**: model missingness as a function of sample-level
   covariates (age, QC batch) rather than aliasing to MCAR.
@@ -465,6 +662,10 @@ simulator with LOD + plates + group effects". Follow-up work:
   assay](https://olink.com/technology/proximity-extension-assay) has a
   noise model that scales with dilution; currently we use a flat per-protein
   sigma.
+- **Covariate-adjusted catalog effects**: age / sex / BMI-conditional
+  deltas instead of the current marginal means.
+- **Longitudinal effects**: time-to-event modulation of the catalog deltas
+  for incidence-cohort simulations.
 
 Tracking discussion in [PR #2](https://github.com/bschilder/synthlab/pull/2);
 please open issues for missing features.

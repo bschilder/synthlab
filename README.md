@@ -88,6 +88,50 @@ See [`synthlab/olink.py`](synthlab/olink.py) for the full API
 `default_explore_3072_panel`, `write_olink_parquet`,
 `load_olink_parquet`).
 
+#### Disease-conditional effect catalog (NEW)
+
+Rather than hand-pick effect sizes, plug in a curated, source-cited
+catalog of per-disease protein NPX shifts mined from published plasma
+proteomics literature. Every row in
+[`synthlab/data/olink_disease_effects.csv`](synthlab/data/olink_disease_effects.csv)
+cites a real DOI — so a downstream user always knows *where* a given
+effect-size estimate came from. See
+[`docs/olink_disease_catalog.md`](docs/olink_disease_catalog.md) for the
+schema and a "how to add a new disease" checklist.
+
+```python
+from synthlab import (
+    OlinkSimConfig, default_explore_3072_panel, simulate_olink_npx,
+    load_disease_effect_catalog,
+)
+
+catalog = load_disease_effect_catalog()           # bundled with package
+print(catalog.diseases())                         # ('Alzheimer', 'BRCA_hereditary', 'CAD', 'CKD', 'Cancer_broad', 'IBD', 'T2D')
+effects = catalog.effects_for(["T2D", "CAD"])     # {protein: {disease: delta_npx}}
+cfg = OlinkSimConfig(
+    n_samples=900,
+    panel=default_explore_3072_panel(),
+    group_effects=effects,
+    group_assignments=["T2D"]*300 + ["CAD"]*300 + ["baseline"]*300,
+    seed=42,
+)
+df = simulate_olink_npx(cfg)
+```
+
+Disease-group row ranges in the shipped CSV (see
+[`synthlab/data/olink_disease_effects.csv`](synthlab/data/olink_disease_effects.csv)):
+
+- **T2D**: rows 2-9 ([Sun et al. 2023 UKB-PPP](https://doi.org/10.1038/s41586-023-06592-6),
+  [Sun et al. 2018 INTERVAL](https://doi.org/10.1038/s41586-018-0175-2))
+- **CAD**: rows 10-16 ([Williams et al. 2022 Sci Transl Med](https://doi.org/10.1126/scitranslmed.abj9625),
+  [Eldjarn et al. 2023 deCODE](https://doi.org/10.1038/s41586-023-06563-x))
+- **Cancer (broad)**: rows 17-22 ([Cohen et al. 2018 CancerSEEK Science](https://doi.org/10.1126/science.aar3247))
+- **BRCA hereditary**: rows 23-26 (null-hypothesis placeholders from
+  [Ahn et al. 2021 Cancers](https://doi.org/10.3390/cancers13102300))
+- **Alzheimer's**: rows 27-31 ([Guo et al. 2024 Nat Aging](https://doi.org/10.1038/s43587-023-00565-0))
+- **CKD**: rows 32-37 ([Dubin et al. 2023 Nat Comm CRIC](https://doi.org/10.1038/s41467-023-41642-7))
+- **IBD**: rows 38-44 ([Hu et al. 2025 Nat Comm UKB-PPP](https://doi.org/10.1038/s41467-025-57879-3))
+
 ## Installation
 
 ```bash

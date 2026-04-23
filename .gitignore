@@ -54,6 +54,12 @@ data/
 *.parquet
 *.lzo
 
+# ...but keep bundled ship-in-wheel data (e.g. disease-effect catalog).
+# Only re-include source files; pycache stays ignored via the global rule above.
+!synthlab/data/
+!synthlab/data/*.py
+!synthlab/data/*.csv
+
 # OS
 .DS_Store
 Thumbs.db

@@ -157,9 +157,11 @@ from synthlab.meds import (
 
 # Olink NPX proteomics simulator
 from synthlab.olink import (
+    DiseaseEffectCatalog,
     OlinkPanelConfig,
     OlinkSimConfig,
     default_explore_3072_panel,
+    load_disease_effect_catalog,
     load_olink_parquet,
     simulate_olink_npx,
     write_olink_parquet,
@@ -374,4 +376,6 @@ __all__ = [
     "load_olink_parquet",
     "simulate_olink_npx",
     "write_olink_parquet",
+    "DiseaseEffectCatalog",
+    "load_disease_effect_catalog",
 ]
