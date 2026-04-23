@@ -59,6 +59,35 @@ df = load_meds_events("~/.cache/synthlab/meds/synthea_100")
 
 Install the optional extra: `pip install synthlab[meds]`.
 
+### Olink NPX simulator (NEW)
+
+Simulate case/control Olink proteomics data with LOD-driven missingness
+and configurable group effects — the first greenfield open-source
+simulator targeted at Olink's NPX / PEA readout (existing tools like
+[MSstatsSampleSize](https://bioconductor.org/packages/MSstatsSampleSize/)
+target LC-MS/MS, and [OlinkAnalyze](https://github.com/Olink-Proteomics/OlinkRPackage)
+ships demo data but no simulator). Priors reflect UKB-PPP
+([Sun et al. 2023](https://www.nature.com/articles/s41586-023-06592-6))
+and OlinkAnalyze `npx_data1` / `npx_data2` baseline distributions:
+
+```python
+from synthlab import OlinkSimConfig, default_explore_3072_panel, simulate_olink_npx
+
+cfg = OlinkSimConfig(
+    n_samples=500,
+    panel=default_explore_3072_panel(),
+    group_effects={"CRP": {"case": 1.8}, "IL6": {"case": 1.2}},
+    group_assignments=["case"] * 250 + ["control"] * 250,
+    seed=42,
+)
+df = simulate_olink_npx(cfg)
+```
+
+See [`synthlab/olink.py`](synthlab/olink.py) for the full API
+(`OlinkPanelConfig`, `OlinkSimConfig`, `simulate_olink_npx`,
+`default_explore_3072_panel`, `write_olink_parquet`,
+`load_olink_parquet`).
+
 ## Installation
 
 ```bash
