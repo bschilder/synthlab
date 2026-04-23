@@ -155,6 +155,16 @@ from synthlab.meds import (
     print_meds_info,
 )
 
+# Olink NPX proteomics simulator
+from synthlab.olink import (
+    OlinkPanelConfig,
+    OlinkSimConfig,
+    default_explore_3072_panel,
+    load_olink_parquet,
+    simulate_olink_npx,
+    write_olink_parquet,
+)
+
 from synthlab.coherent import (
     list_coherent_components,
     list_coherent_files,
@@ -357,4 +367,11 @@ __all__ = [
     "get_meds_cache_dir",
     "get_meds_info",
     "print_meds_info",
+    # Olink NPX proteomics simulator
+    "OlinkPanelConfig",
+    "OlinkSimConfig",
+    "default_explore_3072_panel",
+    "load_olink_parquet",
+    "simulate_olink_npx",
+    "write_olink_parquet",
 ]
