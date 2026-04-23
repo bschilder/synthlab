@@ -49,6 +49,13 @@ dependencies = [
 aws = [
     "boto3>=1.26.0",
 ]
+viz = [
+    # Notebook visualisation stack used by notebooks/olink_demo.ipynb.
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "scikit-learn>=1.5",
+    "umap-learn>=0.5",
+]
 genomics = [
     "numpy>=1.20.0",
 ]
