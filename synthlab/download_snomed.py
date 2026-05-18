@@ -1,95 +1,87 @@
-"""Back-compat shim — the SNOMED downloader now lives in :mod:`biodb.snomed`.
+"""Back-compat shim — SNOMED bulk downloader was retired in 2026-05-18.
 
-The full implementation (with tqdm progress, the 3-strategy auth
-flow, and the OHDSI ``CONCEPT.csv`` loader) was relocated to bioDB on
-2026-05-18. The GitHub Release asset also moved — same bytes, same
-SHA-256, new home at ``bschilder/bioDB`` (release ``vocab-v1``).
+The 175 MB OHDSI ``CONCEPT.csv`` used to be shipped as a GitHub release
+asset. SNOMED CT's license (free in Member countries via UMLS / IHTSDO,
+paid Affiliate license elsewhere) doesn't permit onward redistribution
+from a public mirror, so the asset was deleted and the in-package
+downloader removed.
 
-This module re-exports the public names so any existing
-``from synthlab.download_snomed import ...`` keeps working. New code
-should import directly from :mod:`biodb.snomed`.
+What replaces it:
+
+* **Per-concept lookups** — ``biodb.snomed.query_concept`` /
+  ``search_concepts`` / ``get_descendants`` / ``get_ancestors`` / etc.
+  route through EBI's OLS4. EBI handles SNOMED CT licensing
+  server-side, so callers don't need their own UMLS/IHTSDO license.
+* **Bulk data** — obtain a ``CONCEPT.csv`` from `OHDSI Athena
+  <https://athena.ohdsi.org>`_ after accepting the SNOMED CT license,
+  then load it with ``biodb.snomed.load_concept_csv`` (or
+  ``load_concept_csv_from_zip`` for the raw Athena bundle).
+
+This module re-exports the OLS-backed query helpers and the parsers
+so any existing ``from synthlab.download_snomed import ...`` import
+keeps working. The old ``download_snomed_vocabulary`` /
+``is_snomed_available`` / ``get_concept_csv_path`` names are kept as
+deprecated stubs that raise :class:`RuntimeError` with migration
+guidance — they cannot be transparently emulated since the asset is
+gone.
 """
 
 from __future__ import annotations
 
-import warnings
-
 from biodb.snomed import (
-    CACHE_DIR as _BIODB_CACHE_DIR,
-)
-from biodb.snomed import (
-    GITHUB_ASSET_NAME,
-    GITHUB_RELEASE_TAG,
-    GITHUB_REPO,
-    SNOMED_RELEASE_URL,
-    download_concept_csv as _download_concept_csv,
-)
-from biodb.snomed import (
-    get_concept_csv_path as _get_concept_csv_path,
-)
-from biodb.snomed import (
-    get_snomed_data_dir as _get_snomed_data_dir,
-)
-from biodb.snomed import (
-    is_available as _is_available,
+    ATHENA_DOWNLOAD_PAGE,
+    CACHE_DIR as DEFAULT_SNOMED_DATA_DIR,
+    get_ancestors,
+    get_children,
+    get_descendants,
+    get_parents,
+    get_snomed_data_dir,
+    load_concept_csv,
+    load_concept_csv_from_zip,
+    query_concept,
+    search_concepts,
 )
 
-# Back-compat alias for the cache directory constant.
-DEFAULT_SNOMED_DATA_DIR = _BIODB_CACHE_DIR
-
-# Re-export under the original synthlab names. The original module had
-# slightly different function signatures (``output_dir`` first, plus
-# ``url=`` and ``verbose=`` kwargs) — wrap to preserve those callers.
-
-
-def get_snomed_data_dir():  # type: ignore[no-redef]
-    """Re-export of :func:`biodb.snomed.get_snomed_data_dir`."""
-    return _get_snomed_data_dir()
+_MIGRATION_NOTE = (
+    "synthlab.download_snomed.{name} is retired (2026-05-18). The OHDSI "
+    f"CONCEPT.csv is no longer redistributed from a public mirror — SNOMED "
+    f"CT's license doesn't permit it. Get a vocabulary bundle from "
+    f"{ATHENA_DOWNLOAD_PAGE} (accept the SNOMED CT license first), then "
+    f"call ``biodb.snomed.load_concept_csv(path)`` or "
+    f"``biodb.snomed.load_concept_csv_from_zip(zip_path)``."
+)
 
 
-def get_concept_csv_path():  # type: ignore[no-redef]
-    """Re-export of :func:`biodb.snomed.get_concept_csv_path`."""
-    return _get_concept_csv_path()
+def download_snomed_vocabulary(*args, **kwargs):
+    """Retired — see module docstring + the error message for the migration path."""
+    raise RuntimeError(_MIGRATION_NOTE.format(name="download_snomed_vocabulary"))
 
 
 def is_snomed_available() -> bool:
-    """Back-compat name for :func:`biodb.snomed.is_available`."""
-    return _is_available()
+    """Retired — see module docstring + the error message for the migration path."""
+    raise RuntimeError(_MIGRATION_NOTE.format(name="is_snomed_available"))
 
 
-def download_snomed_vocabulary(
-    output_dir=None,
-    url: str = SNOMED_RELEASE_URL,
-    verbose: bool = True,
-    force: bool = False,
-):
-    """Back-compat wrapper for :func:`biodb.snomed.download_concept_csv`.
-
-    The ``url`` argument is accepted for ABI compatibility but is now
-    ignored — :mod:`biodb.snomed` always uses the release URL on the
-    bioDB repo. If you were overriding ``url`` to point at a private
-    mirror, set ``GITHUB_TOKEN`` instead and bioDB will use the token
-    auth flow against the same release tag.
-    """
-    if url != SNOMED_RELEASE_URL:
-        warnings.warn(
-            f"synthlab.download_snomed.download_snomed_vocabulary(url=...) is "
-            f"ignored — biodb.snomed always uses {SNOMED_RELEASE_URL}. "
-            f"Set GITHUB_TOKEN / GH_TOKEN for private-mirror access.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-    return _download_concept_csv(output_dir=output_dir, force=force, progress=verbose)
+def get_concept_csv_path():
+    """Retired — see module docstring + the error message for the migration path."""
+    raise RuntimeError(_MIGRATION_NOTE.format(name="get_concept_csv_path"))
 
 
 __all__ = [
+    "ATHENA_DOWNLOAD_PAGE",
     "DEFAULT_SNOMED_DATA_DIR",
-    "GITHUB_ASSET_NAME",
-    "GITHUB_RELEASE_TAG",
-    "GITHUB_REPO",
-    "SNOMED_RELEASE_URL",
+    # OLS-backed query helpers (the live, working surface):
+    "get_ancestors",
+    "get_children",
+    "get_descendants",
+    "get_parents",
+    "get_snomed_data_dir",
+    "load_concept_csv",
+    "load_concept_csv_from_zip",
+    "query_concept",
+    "search_concepts",
+    # Deprecated stubs (raise RuntimeError on call):
     "download_snomed_vocabulary",
     "get_concept_csv_path",
-    "get_snomed_data_dir",
     "is_snomed_available",
 ]
