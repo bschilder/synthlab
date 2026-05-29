@@ -43,7 +43,7 @@ dependencies = [
     "accelerate",
     "bitsandbytes",
     "biomcp-python",
-    "biodb @ git+https://github.com/bschilder/bioDB",
+    "biodb @ git+https://github.com/standardmodelbio/bioDB",
 ]
 
 [project.optional-dependencies]
