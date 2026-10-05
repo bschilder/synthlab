@@ -449,3 +449,204 @@ def generate_ehr_benchmark(
                             }
                         )
     return rows
+
+
+def generate_longitudinal_ehr_benchmark(
+    *, patients_per_condition=120, seed=42, extra_aliases=None, conditions=CONDITIONS
+):
+    """Return (event-window documents, full-history patient rows, atomic events).
+
+    Event labels mean supporting evidence within that document. Patient labels
+    mean any supporting event anywhere in the three-year history. Patient vectors
+    pool every nonempty window of the chosen resolution; recent windows do not
+    stand in for full history. Diagnoses under negation/family history are negative.
+    """
+    from collections import defaultdict
+
+    source = generate_ehr_benchmark(
+        patients_per_condition=patients_per_condition,
+        seed=seed,
+        extra_aliases=extra_aliases,
+        conditions=conditions,
+    )
+    grouped = defaultdict(dict)
+    for row in source:
+        if row["resolution"] == "1y":
+            grouped[row["patient_id"]][row["explicitness"]] = row
+    schedules = [(0,), (180,), (500,), (900,), (7, 500), (0, 180, 900)]
+    offsets = (0, 3, 7, 21, 60, 180, 300, 500, 700, 900, 1050)
+    windows, patients, atomic = [], [], []
+    strata = defaultdict(list)
+    for patient_id, versions in grouped.items():
+        reference = versions["explicit"]
+        positive = reference["positive"]
+        index = int(patient_id.rsplit("-", 1)[1])
+        schedule = schedules[index % len(schedules)] if positive else ()
+        stratum = (
+            "case:" + ",".join(map(str, schedule))
+            if positive
+            else "control:" + reference["negative_type"]
+        )
+        strata[(reference["concept_id"], stratum)].append(patient_id)
+        anchor = date.fromisoformat(reference["window_end"])
+        age = int(re.search(r"aged (\d+)", reference["text"]).group(1))
+        per_variant = {}
+        for explicitness, row in versions.items():
+            original = {
+                int((anchor - date.fromisoformat(line[:10])).days): line[12:]
+                for line in row["text"].splitlines()[1:]
+            }
+            events = []
+            for offset in offsets:
+                supporting = positive and offset in schedule
+                clinical_visit = supporting or (
+                    not positive and offset in (0, 7, 180, 500, 900)
+                )
+                if clinical_visit:
+                    text = original[(0, 7, 180)[offsets.index(offset) % 3]]
+                else:
+                    note = original[(3, 21, 60, 300)[offsets.index(offset) % 4]]
+                    text = f"Symptoms: {note} Findings: routine examination reassuring; Treatment reviewed: preventive care and hydration."
+                event_date = anchor - timedelta(days=offset)
+                events.append(
+                    {
+                        "event_id": f"{patient_id}-{event_date.isoformat()}",
+                        "date": event_date,
+                        "positive": supporting,
+                        "text": text,
+                        "negative_type": "case"
+                        if supporting
+                        else reference["negative_type"]
+                        if clinical_visit
+                        else "unrelated_event",
+                    }
+                )
+            per_variant[explicitness] = events
+            for event in events:
+                atomic.append(
+                    {
+                        "document_id": event["event_id"] + "-" + explicitness,
+                        "patient_id": patient_id,
+                        "condition": reference["condition"],
+                        "concept_id": reference["concept_id"],
+                        "positive": event["positive"],
+                        "patient_ever_positive": positive,
+                        "patient_stratum": stratum,
+                        "negative_type": event["negative_type"],
+                        "split": reference["split"],
+                        "explicitness": explicitness,
+                        "event_id": event["event_id"],
+                        "event_date": event["date"].isoformat(),
+                        "text": event["text"],
+                    }
+                )
+        for resolution in ("1d", "1mo", "1y"):
+            if resolution == "1d":
+                boundaries = [
+                    (event["date"] - timedelta(days=1), event["date"])
+                    for event in per_variant["explicit"]
+                ]
+            else:
+                boundaries, end = [], anchor
+                earliest = min(event["date"] for event in per_variant["explicit"])
+                while end >= earliest:
+                    start = window_start(end, resolution)
+                    boundaries.append((start, end))
+                    end = start
+            for explicitness, events in per_variant.items():
+                window_ids, included_ids = [], []
+                for start, end in sorted(boundaries):
+                    selected = [e for e in events if start < e["date"] <= end]
+                    if not selected:
+                        continue
+                    included_ids.extend(e["event_id"] for e in selected)
+                    document_id = (
+                        f"{patient_id}-{resolution}-{end.isoformat()}-{explicitness}"
+                    )
+                    window_ids.append(document_id)
+                    supported = any(e["positive"] for e in selected)
+                    lines = [
+                        f"Adult aged {age}. Clinical record from {start.isoformat()} through {end.isoformat()}."
+                    ]
+                    lines += [
+                        e["date"].isoformat() + ": " + e["text"]
+                        for e in sorted(selected, key=lambda e: e["date"])
+                    ]
+                    windows.append(
+                        {
+                            "document_id": document_id,
+                            "patient_id": patient_id,
+                            "condition": reference["condition"],
+                            "concept_id": reference["concept_id"],
+                            "positive": supported,
+                            "patient_ever_positive": positive,
+                            "patient_stratum": stratum,
+                            "negative_type": "case"
+                            if supported
+                            else reference["negative_type"]
+                            if not positive
+                            else "history_outside_window",
+                            "split": reference["split"],
+                            "level": "event",
+                            "resolution": resolution,
+                            "explicitness": explicitness,
+                            "window_start": start.isoformat(),
+                            "window_end": end.isoformat(),
+                            "n_events": len(selected),
+                            "event_ids": [e["event_id"] for e in selected],
+                            "text": "\n".join(lines),
+                            "target_aliases": reference["target_aliases"],
+                            "generator": "longitudinal-vignettes-v1",
+                        }
+                    )
+                expected = {e["event_id"] for e in events}
+                if set(included_ids) != expected or len(included_ids) != len(expected):
+                    raise ValueError(
+                        "history windows must cover every event exactly once"
+                    )
+                full_text = "\n".join(
+                    e["date"].isoformat() + ": " + e["text"]
+                    for e in sorted(events, key=lambda e: e["date"])
+                )
+                patients.append(
+                    {
+                        "document_id": f"{patient_id}-full-history-{resolution}-{explicitness}",
+                        "patient_id": patient_id,
+                        "condition": reference["condition"],
+                        "concept_id": reference["concept_id"],
+                        "positive": any(e["positive"] for e in events),
+                        "patient_ever_positive": positive,
+                        "patient_stratum": stratum,
+                        "negative_type": reference["negative_type"],
+                        "split": reference["split"],
+                        "level": "patient",
+                        "resolution": resolution,
+                        "explicitness": explicitness,
+                        "window_document_ids": window_ids,
+                        "n_windows": len(window_ids),
+                        "n_events": len(events),
+                        "window_start": min(e["date"] for e in events).isoformat(),
+                        "window_end": anchor.isoformat(),
+                        "text": full_text,
+                        "target_aliases": reference["target_aliases"],
+                        "generator": "longitudinal-vignettes-v1",
+                    }
+                )
+    # Default cohort gives every evidence-age and negative-control stratum all splits.
+    # Tiny test cohorts keep the original case/control split instead of empty strata.
+    assignments = {}
+    rng = random.Random(seed)
+    for ids in strata.values():
+        if len(ids) >= 3:
+            shuffled = list(ids)
+            rng.shuffle(shuffled)
+            n_train, n_val = max(1, int(len(ids) * 0.6)), max(1, int(len(ids) * 0.2))
+            labels = (
+                ["train"] * n_train
+                + ["validation"] * n_val
+                + ["test"] * (len(ids) - n_train - n_val)
+            )
+            assignments.update(zip(shuffled, labels, strict=True))
+    for row in [*windows, *patients, *atomic]:
+        row["split"] = assignments.get(row["patient_id"], row["split"])
+    return windows, patients, atomic
