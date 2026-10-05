@@ -338,13 +338,7 @@ def generate_ehr_benchmark(
                     symptoms = rng.sample(
                         condition.symptoms, rng.randint(1, len(condition.symptoms))
                     )
-                    clinical = "; ".join(
-                        [
-                            *symptoms,
-                            rng.choice(condition.findings),
-                            "Treatment reviewed: " + rng.choice(condition.medications),
-                        ]
-                    )
+                    clinical = "; ".join(symptoms)
                     diagnosis = rng.choice(
                         [
                             "Assessment: {name}.",
@@ -364,11 +358,47 @@ def generate_ehr_benchmark(
                         "negation": "Investigations exclude {name} in this patient.",
                         "family_history": "A relative has {name}; patient evaluation is negative.",
                     }[negative_type].format(name=condition.name)
+
+                def visit_text(condition, positive, clinical):
+                    # Match section headings in cases/controls; only clinical content differs.
+                    complaint = (
+                        "; ".join(
+                            rng.sample(
+                                condition.symptoms,
+                                rng.randint(1, len(condition.symptoms)),
+                            )
+                        )
+                        if positive
+                        else clinical
+                    )
+                    finding = (
+                        rng.choice(condition.findings)
+                        if positive
+                        else rng.choice(
+                            (
+                                "targeted investigations reassuring",
+                                "no persistent abnormality on follow-up",
+                            )
+                        )
+                    )
+                    medication = (
+                        rng.choice(condition.medications)
+                        if positive
+                        else rng.choice(
+                            (
+                                "saline nasal spray as needed",
+                                "acetaminophen for occasional discomfort",
+                                "daily multivitamin",
+                            )
+                        )
+                    )
+                    return f"Symptoms: {complaint}; Findings: {finding}; Treatment reviewed: {medication}."
+
                 events = [
                     {
                         "date": (anchor - timedelta(days=offset)).isoformat(),
                         "text": (
-                            clinical
+                            visit_text(condition, positive, clinical)
                             if offset in (0, 7, 180)
                             else rng.choice(background)
                         ),
@@ -415,7 +445,7 @@ def generate_ehr_benchmark(
                                 "n_events": len(selected),
                                 "text": text,
                                 "target_aliases": list(aliases),
-                                "generator": "controlled-vignettes-v1",
+                                "generator": "controlled-vignettes-v2",
                             }
                         )
     return rows

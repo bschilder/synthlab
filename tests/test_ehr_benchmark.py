@@ -11,6 +11,10 @@ def test_paired_windows_labels_and_patient_splits():
         assert row["concept_id"] not in row["text"]
         if row["explicitness"] == "implicit":
             assert row["condition"].lower() not in row["text"].lower()
+            # Section presence cannot serve as a universal case/control shortcut.
+            assert "Symptoms:" in row["text"]
+            assert "Findings:" in row["text"]
+            assert "Treatment reviewed:" in row["text"]
     for pair in groups.values():
         assert len(pair) == 6
         assert len({r["split"] for r in pair}) == 1
