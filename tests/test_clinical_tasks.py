@@ -47,6 +47,12 @@ def patient_row(bundle, patient, task="multilabel", version="implicit", horizon=
     )
 
 
+def represented_text(doc, by_id):
+    if doc.get("window_document_ids"):
+        return "\n".join(by_id[key]["text"] for key in doc["window_document_ids"])
+    return doc["text"]
+
+
 def test_all_patients_natural_prevalence_global_split_and_no_input_labels():
     original = copy.deepcopy(FIXTURE)
     bundle = generate()
@@ -291,7 +297,7 @@ def test_controlled_clue_deletion_is_paired_ambiguous_and_assertion_aware():
             assert row["gold_labels"] == []
             assert row["evidence_eligible_ids"] == []
         if row["stress_variant"] == "clue_deleted":
-            deleted.add(doc["text"])
+            deleted.add(represented_text(doc, docs))
     assert len(deleted) == 1  # Different latent diseases become indistinguishable.
     assert all(len(splits) == 1 for splits in paired.values())
     assert any(len(row["gold_labels"]) == 2 for row in bundle["labels"])
@@ -335,6 +341,120 @@ def test_incident_horizon_boundary_and_indication_before_formal_diagnosis():
     _, incident = patient_row(bundle, "toy-incident", task="incident", horizon=90)
     assert incident["first_recorded_dates"]["SNOMED:44054006"] == "2020-02-01"
     assert incident["gold_labels"] == ["SNOMED:44054006"]
+
+
+def test_all_natural_tasks_share_lossless_full_panel_windows_and_compact_patient_text():
+    bundle = generate()
+    docs = {row["document_id"]: row for row in bundle["documents"]}
+    labels = {row["document_id"]: row for row in bundle["labels"]}
+    events = {row["event_id"]: row for row in bundle["events"]}
+    references = defaultdict(set)
+    windows = [doc for doc in docs.values() if doc["level"] == "event"]
+    assert {doc["task"] for doc in windows} == {"history"}
+    assert all(
+        labels[doc["document_id"]]["candidate_ids"]
+        == bundle["metadata"]["candidate_ids"]
+        for doc in windows
+    )
+    for doc in docs.values():
+        if doc["level"] != "patient":
+            continue
+        version = doc["explicitness"]
+        expected = "\n".join(
+            events[key]["date"] + ": " + events[key][version + "_text"]
+            for key in doc["event_ids"]
+        )
+        if doc["event_ids"]:
+            assert len(doc["text"]) < 100
+            assert doc["text_reference_policy"] == "all_referenced_dated_windows"
+            assert represented_text(doc, docs) == expected
+            assert (
+                doc["input_text_sha256"]
+                == hashlib.sha256(expected.encode()).hexdigest()
+            )
+        else:
+            assert doc["window_document_ids"] == []
+        if doc["task"] != "incident":
+            references[(doc["patient_id"], doc["resolution"], version)].add(
+                tuple(doc["window_document_ids"])
+            )
+            observed = {
+                target
+                for key in doc["event_ids"]
+                for target in events[key]["recorded_labels"]
+            }
+            assert set(labels[doc["document_id"]]["gold_labels"]) == observed & set(
+                labels[doc["document_id"]]["candidate_ids"]
+            )
+    assert all(len(values) == 1 for values in references.values())
+    shared = patient_row(bundle, "toy-incident", task="multilabel")[0][
+        "window_document_ids"
+    ]
+    past = patient_row(bundle, "toy-incident", task="incident", horizon=90)[0][
+        "window_document_ids"
+    ]
+    assert set(past) < set(shared)  # Complete old windows reuse the same natural input.
+
+
+def test_shared_window_at_cutoff_is_clipped_without_losing_future_full_history_facts():
+    source = copy.deepcopy(FIXTURE["tables"])
+    source["observations"].append(
+        {
+            "PATIENT": "toy-control",
+            "DATE": "2019-12-15",
+            "DESCRIPTION": "AFTER_DECEMBER_CUTOFF",
+            "VALUE": "99",
+            "UNITS": "mg/dL",
+        }
+    )
+    source["conditions"].append(
+        {
+            "PATIENT": "toy-control",
+            "START": "2019-12-15",
+            "CODE": "13645005",
+            "DESCRIPTION": "Chronic obstructive pulmonary disease",
+        }
+    )
+    bundle = generate_clinical_tasks(
+        source,
+        FIXTURE["concept_sets"],
+        conditions=PANEL,
+        differential_families=FAMILIES,
+        cutoff_dates=["2019-12-01"],
+        source_end_date=FIXTURE["source_end_date"],
+    )
+    docs = {row["document_id"]: row for row in bundle["documents"]}
+    incident = [
+        doc
+        for doc in docs.values()
+        if doc["task"] == "incident" and doc["patient_id"] == "toy-control"
+    ]
+    natural = [
+        doc
+        for doc in docs.values()
+        if doc["task"] == "multilabel"
+        and doc["level"] == "patient"
+        and doc["patient_id"] == "toy-control"
+    ]
+    for doc in incident:
+        assert "AFTER_DECEMBER_CUTOFF" not in represented_text(doc, docs)
+        assert all(
+            docs[key]["window_end"] <= doc["cutoff_date"]
+            for key in doc["window_document_ids"]
+        )
+    assert all(
+        "AFTER_DECEMBER_CUTOFF" in represented_text(doc, docs) for doc in natural
+    )
+    month = next(doc for doc in incident if doc["resolution"] == "1mo")
+    clipped = docs[month["window_document_ids"][0]]
+    assert clipped["window_start"] == "2019-12-01"
+    assert clipped["window_end"] == "2019-12-01"
+    full = next(
+        doc
+        for doc in natural
+        if doc["resolution"] == "1mo" and doc["explicitness"] == month["explicitness"]
+    )
+    assert clipped["document_id"] not in full["window_document_ids"]
 
 
 def test_immutable_export_digests_and_reproducibility(tmp_path):

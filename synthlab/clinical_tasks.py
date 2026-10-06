@@ -231,7 +231,19 @@ def _record_labels(events, candidate_ids, version):
 def _add(
     documents, labels, base, events, candidate_ids, version, *, label_override=None
 ):
-    text = "\n".join(e["date"] + ": " + e[version + "_text"] for e in events)
+    # Full-history text is represented losslessly by dated windows. Avoid copying
+    # the same ignored long string into every task/resolution/cutoff/horizon row.
+    digest = hashlib.sha256()
+    for index, event in enumerate(events):
+        if index:
+            digest.update(b"\n")
+        digest.update((event["date"] + ": " + event[version + "_text"]).encode())
+    referenced = bool(base.get("window_document_ids"))
+    text = (
+        "Clinical history is represented by the referenced dated windows."
+        if referenced
+        else "\n".join(e["date"] + ": " + e[version + "_text"] for e in events)
+    )
     document = {
         **base,
         "explicitness": version,
@@ -239,6 +251,11 @@ def _add(
         "event_ids": [e["event_id"] for e in events],
     }
     document["text_sha256"] = hashlib.sha256(document["text"].encode()).hexdigest()
+    document["input_text_sha256"] = (
+        digest.hexdigest() if events else document["text_sha256"]
+    )
+    if referenced:
+        document["text_reference_policy"] = "all_referenced_dated_windows"
     gold = (
         _record_labels(events, candidate_ids, version)
         if label_override is None
@@ -286,6 +303,8 @@ def _history_documents(
     cutoff=None,
     extra=None,
     label_factory=None,
+    window_registry=None,
+    window_candidate_ids=None,
 ):
     extra = extra or {}
     split = patient_split(patient, seed)
@@ -301,6 +320,30 @@ def _history_documents(
         for version in EXPLICITNESS:
             windows = []
             for (start, end), entries in sorted(groups.items()):
+                if window_registry is not None:
+                    key = (patient, resolution, start, end, version)
+                    if key not in window_registry:
+                        base = {
+                            "document_id": f"{patient}:history:{resolution}:{start}:{end}:{version}",
+                            "patient_id": patient,
+                            "split": split,
+                            "task": "history",
+                            "level": "event",
+                            "resolution": resolution,
+                            "window_start": start,
+                            "window_end": end,
+                            "cutoff_date": end,
+                        }
+                        window_registry[key] = _add(
+                            documents,
+                            labels,
+                            base,
+                            entries,
+                            window_candidate_ids or candidate_ids,
+                            version,
+                        )
+                    windows.append(window_registry[key])
+                    continue
                 base = {
                     "document_id": f"{patient}:{task}:{suffix}:{resolution}:{start}:{version}",
                     "patient_id": patient,
@@ -593,7 +636,15 @@ def generate_clinical_tasks(
         for task in ("multilabel", "evidence"):
             if task in tasks:
                 _history_documents(
-                    documents, labels, patient, events, ids, task=task, seed=seed
+                    documents,
+                    labels,
+                    patient,
+                    events,
+                    ids,
+                    task=task,
+                    seed=seed,
+                    window_registry=history_registry,
+                    window_candidate_ids=ids,
                 )
         if "differential" in tasks:
             for family, candidates in families.items():
@@ -607,6 +658,8 @@ def generate_clinical_tasks(
                     seed=seed,
                     suffix=family,
                     extra={"family_id": family},
+                    window_registry=history_registry,
+                    window_candidate_ids=ids,
                 )
         if "incident" in tasks:
             death_value = demographics[patient].get("DEATHDATE", "")
@@ -650,6 +703,9 @@ def generate_clinical_tasks(
                         seed,
                     )
     flat_events = [event for events in by_patient.values() for event in events]
+    unique_inputs = {
+        doc["text"] for doc in documents if not doc.get("window_document_ids")
+    } | {event[version + "_text"] for event in flat_events for version in EXPLICITNESS}
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "corpus": "natural_synthea",
@@ -693,6 +749,7 @@ def generate_clinical_tasks(
         ],
         "clinical_date_policy": "each_record_own_START_or_DATE; bundle_patient_day; inclusive_calendar_windows",
         "implicit_policy": "omit_all_diagnosis_and_indication_fields; remove_entire_panel_aliases; no_target_specific_text",
+        "storage_policy": "canonical_full_panel_history_windows_shared_all_natural_tasks; nonempty_patient_text_is_reference_placeholder; input_text_sha256_hashes_exact_full_dated_history; source_events_and_patient_gold_unchanged",
         "label_policy": "source_recorded_SNOMED_root_or_verified_descendant_diagnosis_or_indication",
         "negative_policy": "no_recorded_code_in_scope; not_validated_disease_absence",
         "natural_evidence_policy": "attribution_to_recorded_source_event; explicit_only_gradable; peripheral_context_is_not_proof_of_sufficiency",
@@ -715,6 +772,7 @@ def generate_clinical_tasks(
             "labels": len(labels),
             "events": len(flat_events),
             "unique_texts": len({d["text_sha256"] for d in documents}),
+            "unique_input_texts": len(unique_inputs),
             "documents_by_task_level": dict(
                 Counter(d["task"] + ":" + d["level"] for d in documents)
             ),

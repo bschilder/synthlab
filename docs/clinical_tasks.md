@@ -59,6 +59,15 @@ Document fields are `document_id`, `patient_id`, `split`, `task`, `level`,
 documents have `horizon_days`. Dates use ISO format. Calendar windows are
 inclusive; an empty history has `window_start=null` and no event references.
 
+Nonempty patient histories use a short reference placeholder in `text`; the
+encoder resolves every referenced window instead of embedding that placeholder.
+All original clinical text remains in canonical windows and atomic events.
+`input_text_sha256` hashes the exact full dated event text by streaming its
+bytes, while `text_sha256` hashes the field actually stored in that row. The
+clinical input fingerprint stays distinct even if a low-dimensional projection
+maps different histories to identical vectors. Empty histories retain their
+original no-record input text and have no windows.
+
 Gold fields include ordered `candidate_ids`, `gold_labels`, `eligible_ids`,
 `eligible_mask` in candidate order, `evidence_event_ids` mapping each candidate to
 supporting source event IDs, `evidence_eligible_ids`, `information_status`,
@@ -98,8 +107,11 @@ windows. Pool **all** referenced windows; do not discard old windows or truncate
 to a last-year history. Embed every text chunk when an encoder has a token limit.
 Deduplicate embedding computation by `text_sha256` across tasks and resolutions.
 
-Incident patient documents refer to shared event-window documents with
-`task="history"`. Historical windows are reused across horizons and cutoffs;
+All natural patient documents refer to shared event-window documents with
+`task="history"`. Multilabel, evidence and differential tasks reuse one canonical
+window for each patient/resolution/boundary/explicitness combination. Its gold
+covers the full validated panel; each patient row retains its task-specific gold
+and candidate mask. Historical windows are reused across horizons and cutoffs;
 the window intersecting a cutoff is clipped at that cutoff. Shared history
 windows have only their own source-record labels, never future incident gold.
 The evaluator must resolve `window_document_ids` globally and enforce the same
@@ -109,6 +121,9 @@ documents, with one risk label per patient/cutoff/horizon, not repeated window
 labels. At ten cutoffs and two horizons the incident patient count is
 `patients × 10 × 2 × 3 resolutions × 2 explicitness` (140,520 for 1,171 patients).
 History-window rows are shared, and actual counts are recorded in metadata.
+Storage scales as the canonical window count plus task-specific patient rows,
+not one window copy per task. `counts.unique_input_texts` reports the exact
+encoder input vocabulary, including atomic events used for attribution.
 
 ## Task definitions
 
