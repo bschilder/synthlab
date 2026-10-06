@@ -1,0 +1,52 @@
+{
+  "source_end_date": "2021-03-01",
+  "cutoff_dates": ["2020-01-01"],
+  "concept_sets": {
+    "SNOMED:44054006": ["44054006", "999001"],
+    "SNOMED:195967001": ["195967001"],
+    "SNOMED:13645005": ["13645005"],
+    "SNOMED:84114007": ["84114007"]
+  },
+  "tables": {
+    "patients": [
+      {"Id": "toy-prevalent", "BIRTHDATE": "1960-01-01"},
+      {"Id": "toy-incident", "BIRTHDATE": "1960-01-01"},
+      {"Id": "toy-control", "BIRTHDATE": "1960-01-01"},
+      {"Id": "toy-censored", "BIRTHDATE": "1960-01-01"},
+      {"Id": "toy-death", "BIRTHDATE": "1960-01-01", "DEATHDATE": "2020-02-01"},
+      {"Id": "toy-diagnosis-only", "BIRTHDATE": "1960-01-01"},
+      {"Id": "toy-newborn", "BIRTHDATE": "2020-02-01"},
+      {"Id": "toy-no-events", "BIRTHDATE": "1960-01-01"}
+    ],
+    "encounters": [
+      {"Id": "e0", "PATIENT": "toy-prevalent", "START": "2019-12-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e1", "PATIENT": "toy-prevalent", "START": "2021-02-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e2", "PATIENT": "toy-incident", "START": "2019-12-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e3", "PATIENT": "toy-incident", "START": "2020-02-01", "DESCRIPTION": "Outpatient assessment", "REASONCODE": "999001", "REASONDESCRIPTION": "Type 2 diabetes mellitus"},
+      {"Id": "e4", "PATIENT": "toy-incident", "START": "2021-02-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e5", "PATIENT": "toy-control", "START": "2019-12-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e6", "PATIENT": "toy-control", "START": "2021-02-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e7", "PATIENT": "toy-censored", "START": "2019-12-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e8", "PATIENT": "toy-censored", "START": "2020-01-15", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e9", "PATIENT": "toy-death", "START": "2019-12-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e10", "PATIENT": "toy-death", "START": "2020-02-01", "DESCRIPTION": "Outpatient assessment"},
+      {"Id": "e11", "PATIENT": "toy-newborn", "START": "2020-02-01", "DESCRIPTION": "Preventive assessment"}
+    ],
+    "conditions": [
+      {"PATIENT": "toy-prevalent", "START": "2019-12-01", "CODE": "44054006", "DESCRIPTION": "Type 2 diabetes mellitus"},
+      {"PATIENT": "toy-prevalent", "START": "2019-12-01", "CODE": "195967001", "DESCRIPTION": "Asthma"},
+      {"PATIENT": "toy-prevalent", "START": "2019-12-01", "CODE": "13645005", "DESCRIPTION": "Chronic obstructive pulmonary disease"},
+      {"PATIENT": "toy-diagnosis-only", "START": "2018-06-01", "CODE": "84114007", "DESCRIPTION": "Heart failure"}
+    ],
+    "observations": [
+      {"PATIENT": "toy-prevalent", "DATE": "2019-12-01", "DESCRIPTION": "Serum glucose", "VALUE": "170", "UNITS": "mg/dL"},
+      {"PATIENT": "toy-incident", "DATE": "2020-02-01", "DESCRIPTION": "POSTCUTOFF glucose", "VALUE": "180", "UNITS": "mg/dL"},
+      {"PATIENT": "toy-control", "DATE": "2021-02-01", "DESCRIPTION": "Serum glucose", "VALUE": "90", "UNITS": "mg/dL"}
+    ],
+    "medications": [
+      {"PATIENT": "toy-prevalent", "START": "2019-12-01", "DESCRIPTION": "Asthma COPD diabetes mellitus review", "REASONCODE": "195967001", "REASONDESCRIPTION": "Asthma"}
+    ],
+    "procedures": [], "careplans": [], "allergies": [],
+    "imaging_studies": [], "devices": [], "immunizations": [], "supplies": []
+  }
+}

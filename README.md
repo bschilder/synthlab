@@ -444,6 +444,12 @@ The UK Biobank Synthetic Dataset contains:
 
 ## Examples
 
+The [clinical task protocol](docs/clinical_tasks.md) describes complete-population
+Synthea multilabel identification, differential identification, incident record
+prediction and source-event attribution, plus a separate controlled evidence and
+abstention stress corpus. Inputs and gold metadata are exported separately, with
+global patient splits and natural disease imbalance preserved.
+
 See the `examples/` and `notebooks/` directories for detailed examples:
 - `examples/basic_usage.py` - Basic Synthea usage
 - `examples/ukbiobank_synthetic_example.py` - UK Biobank Synthetic Dataset examples
