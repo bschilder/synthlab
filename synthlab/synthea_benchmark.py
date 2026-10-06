@@ -20,6 +20,19 @@ from .ehr_benchmark import CONDITIONS
 
 SOURCE_URL = "https://synthetichealth.github.io/synthea-sample-data/downloads/synthea_sample_data_csv_apr2020.zip"
 SOURCE_SHA256 = "4194b18c11eaedcf0d5d5dd448d8ac9661f14381e2ef9f109215dc42266cd38a"
+CLINICAL_TABLES = [
+    "encounters",
+    "conditions",
+    "observations",
+    "medications",
+    "procedures",
+    "careplans",
+    "allergies",
+    "imaging_studies",
+    "devices",
+    "immunizations",
+    "supplies",
+]
 
 
 def read_csv_archive(path):
@@ -28,15 +41,7 @@ def read_csv_archive(path):
             name: list(
                 csv.DictReader(io.TextIOWrapper(archive.open("csv/" + name + ".csv")))
             )
-            for name in [
-                "patients",
-                "encounters",
-                "conditions",
-                "observations",
-                "medications",
-                "procedures",
-                "careplans",
-            ]
+            for name in ["patients", *CLINICAL_TABLES]
         }
 
 
@@ -46,54 +51,59 @@ def _hidden(text, pattern):
 
 
 def histories_from_csv(tables):
-    """Bundle dated encounters and preserve orphan clinical entries as dated events."""
-    histories, encounters = defaultdict(dict), {}
+    """Bundle each patient's entries by their own day, retaining encounter provenance."""
+    histories = defaultdict(dict)
+
+    def dated_event(patient, day, encounter):
+        if not day:
+            raise ValueError("clinical entries require their own START or DATE")
+        date.fromisoformat(day)
+        event = histories[patient].setdefault(
+            day,
+            {
+                "event_id": patient + "-" + day,
+                "date": day,
+                "encounter_ids": set(),
+                "facts": [],
+                "diagnoses": [],
+                "codes": set(),
+            },
+        )
+        if encounter:
+            event["encounter_ids"].add(encounter)
+        return event
+
     for row in tables["encounters"]:
         patient, identifier = row["PATIENT"], row["Id"]
-        event = {
-            "event_id": identifier,
-            "date": row["START"][:10],
-            "facts": [],
-            "diagnoses": [],
-            "codes": set(),
-        }
+        event = dated_event(patient, row["START"][:10], identifier)
         event["facts"].append(("encounter", row["DESCRIPTION"]))
         if row.get("REASONCODE"):
             event["codes"].add(row["REASONCODE"])
             event["diagnoses"].append(row.get("REASONDESCRIPTION", ""))
-        histories[patient][identifier] = event
-        encounters[(patient, identifier)] = event
-    for table in [
-        "conditions",
-        "observations",
-        "medications",
-        "procedures",
-        "careplans",
-    ]:
-        for index, row in enumerate(tables[table]):
+    for table in CLINICAL_TABLES[1:]:
+        for row in tables.get(table, []):
             patient, identifier = row["PATIENT"], row.get("ENCOUNTER", "")
-            event = encounters.get((patient, identifier))
-            if event is None:
-                identifier = f"{table}-{index}"
-                event = {
-                    "event_id": identifier,
-                    "date": row.get("DATE", row.get("START"))[:10],
-                    "facts": [],
-                    "diagnoses": [],
-                    "codes": set(),
-                }
-                histories[patient][identifier] = event
+            event = dated_event(
+                patient, (row.get("DATE") or row.get("START", ""))[:10], identifier
+            )
             if table == "conditions":
                 event["codes"].add(row["CODE"])
                 event["diagnoses"].append(row["DESCRIPTION"])
             else:
-                fact = row["DESCRIPTION"]
+                fact = (
+                    row["MODALITY_DESCRIPTION"] + " of " + row["BODYSITE_DESCRIPTION"]
+                    if table == "imaging_studies"
+                    else row["DESCRIPTION"]
+                )
                 if table == "observations":
                     fact += ": " + row.get("VALUE", "") + " " + row.get("UNITS", "")
                 event["facts"].append((table, fact.strip()))
                 if row.get("REASONCODE"):
                     event["codes"].add(row["REASONCODE"])
                     event["diagnoses"].append(row.get("REASONDESCRIPTION", ""))
+    for events in histories.values():
+        for event in events.values():
+            event["encounter_ids"] = sorted(event["encounter_ids"])
     return {
         patient: sorted(events.values(), key=lambda e: (e["date"], e["event_id"]))
         for patient, events in histories.items()
@@ -361,6 +371,9 @@ def generate_synthea_benchmark(
         "source_url": SOURCE_URL,
         "source_sha256": SOURCE_SHA256,
         "source_patients": len(source_patients),
+        "included_clinical_tables": CLINICAL_TABLES,
+        "clinical_date_policy": "each_record_own_START_or_DATE; bundle_by_patient_and_day",
+        "excluded_tables": "administrative providers, organizations, payers, payer transitions",
         "selected_unique_patients": len({p["patient_id"] for p in patient_rows}),
         "target_counts": counts,
         "excluded_conditions": [

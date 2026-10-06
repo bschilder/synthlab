@@ -95,3 +95,48 @@ def test_orphan_conditions_are_retained_as_old_dated_events():
     history = histories_from_csv(source)["p39"]
     assert history[0]["date"] == "1956-03-01"
     assert "44054006" in history[0]["codes"]
+
+
+def test_linked_clinical_entries_keep_own_dates_and_all_clinical_tables():
+    source = tables()
+    source["medications"].append(
+        {
+            "PATIENT": "p39",
+            "ENCOUNTER": "p39-old",
+            "START": "2001-02-01",
+            "DESCRIPTION": "Nitrofurantoin",
+            "REASONCODE": "44054006",
+            "REASONDESCRIPTION": "Type 2 diabetes mellitus",
+        }
+    )
+    for table in ["allergies", "devices", "immunizations", "supplies"]:
+        source[table] = [
+            {
+                "PATIENT": "p39",
+                "ENCOUNTER": "p39-old",
+                "START": "2001-02-01",
+                "DESCRIPTION": table,
+            }
+        ]
+    source["imaging_studies"] = [
+        {
+            "PATIENT": "p39",
+            "ENCOUNTER": "p39-old",
+            "DATE": "2001-02-01",
+            "MODALITY_DESCRIPTION": "Digital Radiography",
+            "BODYSITE_DESCRIPTION": "Arm",
+        }
+    ]
+    history = histories_from_csv(source)["p39"]
+    old, later = history[:2]
+    assert old["date"] == "2001-01-01" and not old["codes"]
+    assert later["date"] == "2001-02-01" and "44054006" in later["codes"]
+    assert later["encounter_ids"] == ["p39-old"]
+    assert {name for name, _ in later["facts"]} == {
+        "medications",
+        "allergies",
+        "devices",
+        "immunizations",
+        "supplies",
+        "imaging_studies",
+    }
