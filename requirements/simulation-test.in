@@ -1,0 +1,6 @@
+# External simulation process only; msprime is GPL-3.0-or-later.
+# Keep this separate from CuEvo and from synthlab's unrelated EHR/LLM stack.
+# This exact test environment requires Python >=3.12 (NumPy 2.5.4).
+msprime==1.4.4
+numpy==2.5.4
+pytest==9.1.1
