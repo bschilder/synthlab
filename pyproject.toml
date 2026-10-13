@@ -47,6 +47,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+simulation = [
+    "msprime>=1.4.4,<2",
+    "numpy>=2,<3",
+]
 aws = [
     "boto3>=1.26.0",
 ]

@@ -31,6 +31,10 @@ SynthLab provides Python interfaces for working with major synthetic healthcare 
 
 ### Genomics Data Support (NEW)
 - **HAPNEST Integration**: Download and load HAPNEST synthetic genomics data (1M+ individuals, 6.8M variants)
+- **Genealogy truth simulation**: Optional msprime adapter preserving true marginal
+  trees, explicit diploid sample-node mappings and phased multiallelic genotypes.
+  See [genealogy simulation](docs/genealogy_simulation.md) for seed, coordinate,
+  resource and external-engine conventions.
 - **Synthetic Genotype Generation**: Generate simple synthetic genotypes for testing
 - **PLINK Format Support**: Work with standard genomics file formats (.pgen, .pvar, .psam)
 
