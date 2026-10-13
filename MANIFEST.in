@@ -1,0 +1,7 @@
+include tests/__init__.py
+include tests/numerical_modules.py
+include .github/workflows/simulation.yml
+include .github/workflows/test.yml
+include requirements/simulation-test.in
+include requirements/simulation-test.lock
+include docs/genealogy_simulation.md

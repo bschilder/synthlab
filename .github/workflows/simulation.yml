@@ -5,10 +5,14 @@ on:
     branches: [main]
     paths:
       - 'synthlab/genealogy.py'
+      - 'synthlab/genotype_phenotypes.py'
       - 'tests/test_genealogy.py'
+      - 'tests/test_genotype_phenotypes.py'
+      - 'tests/numerical_modules.py'
       - 'requirements/simulation-test.*'
       - '.github/workflows/simulation.yml'
       - 'pyproject.toml'
+      - 'MANIFEST.in'
   workflow_dispatch:
 
 permissions:
@@ -37,5 +41,5 @@ jobs:
         run: |
           uv venv --python '${{ matrix.python }}' .venv-simulation
           uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
-      - name: Test true genealogies and phased genotypes
-        run: .venv-simulation/bin/python -m pytest tests/test_genealogy.py -q
+      - name: Test true genealogies, phased genotypes and quantitative phenotypes
+        run: .venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py -q

@@ -59,15 +59,104 @@ Default limits are2048 people,100,000 sites and256MiB of conservatively estimate
 principal output arrays. These limits cannot constrain msprime's internal event
 allocations before it returns. Large cases need separate process time/memory
 controls on remote compute. No people or sites are silently dropped to fit a
-limit. The adapter does not generate causal phenotypes, validate inferred ARGs,
-or establish association calibration.
+limit. The genealogy adapter does not generate causal phenotypes, validate
+inferred ARGs, or establish association calibration. The separate quantitative
+generator below supplies planted phenotype mechanisms.
+
+## Quantitative phenotype truth
+
+`synthlab.genotype_phenotypes` consumes complete diploid integer allele indices
+from this adapter or another validated source, including HAPNEST. It requires
+exact ordered person, variant, allele, trait and covariate identifiers. Index0
+has the meaning declared by the caller's allele vocabulary; all allele-specific
+effects count exact copies, including at multiallelic sites. Missing or invalid
+truth genotypes are rejected; contaminated observed calls belong in a separate
+artifact.
+
+```python
+import numpy as np
+from synthlab.genotype_phenotypes import AlleleEffect, simulate_quantitative_phenotypes
+
+phenotypes = simulate_quantitative_phenotypes(
+    sample_ids=('person-a', 'person-b', 'person-c'),
+    variant_ids=('site-a',), alleles=(('A', 'C'),),
+    genotypes=np.array([[[0, 0]], [[0, 1]], [[1, 1]]], dtype=np.int8),
+    trait_ids=('expression', 'height'),
+    effects=(AlleleEffect('site-a', 1, (2., -1.)),),
+    covariate_ids=('intercept',), covariates=np.ones((3, 1)),
+    covariate_effects=np.array([[5., -2.]]),
+    residual_covariance=np.array([[1., .2], [.2, 2.]]), seed=91,
+    observed_probabilities=np.array([[1., .5], [.8, 1.], [.5, .5]]),
+    missingness_description='MCAR: predeclared person/trait observation probabilities',
+)
+print(phenotypes.genetic_means)  # [[0, 0], [2, -1], [4, -2]]
+print(phenotypes.observed_values)  # NaN only at cells marked unobserved
+```
+
+No intercept, centering, allele frequency or scaling is inferred. `AlleleEffect`
+is a signed per-copy coefficient vector in trait order. Other mechanisms have
+separate inputs and returned means:
+
+- `DominanceEffect(variant_id, allele_index, effects)` applies when exactly one
+  homologue carries the target allele, including at a multiallelic site.
+- `InteractionEffect(first_variant_id, first_allele_index, second_variant_id,
+  second_allele_index, effects, first_center=0., second_center=0.)` multiplies
+  the two dosages after subtracting caller-fixed centers. This permits a balanced
+  pure-epistasis scenario without marginal linear effects.
+- `ContextEffect(variant_id, allele_index, context_id, effects,
+  context_center=0.)` multiplies dosage by a continuous context deviation.
+  Contexts have exact column identifiers; no ancestry categories are required.
+- `CompoundHetEffect(first_variant_id, first_allele_index, second_variant_id,
+  second_allele_index, effects)` requires two distinct nonreference alleles,
+  each carried once, on opposite homologues. The same multiallelic site is
+  permitted. Cis configurations and target-allele homozygotes do not qualify.
+
+Genetic means, fixed covariate means, supplied `environment_means`, independent
+noise, structured environmental noise, complete outcomes and recorded cells
+remain separate. Perfectly linked causal features keep their distinct planted
+coefficients; this does not imply they can be uniquely localized by an analysis.
+Optional `residual_row_factors` A and their exact `residual_factor_ids` generate
+shared environmental noise. In column-major person-by-trait order its full
+covariance is `sampling_covariance ⊗ (I + A @ A.T)`. Households or other shared
+environments can therefore be simulated separately from the genetic mechanism.
+
+Covariance validation and factorization use a correlation scale, then restore
+caller units. A zero variance requires exactly zero covariances with that trait;
+negative variances and invalid correlations are rejected. Positive eigenvalues
+are retained without a relative rank cutoff. At a numerically singular boundary,
+negative eigenvalues within the declared roundoff tolerance are omitted. The
+requested covariance, actual sampling covariance, rank, tolerance and maximum
+difference are returned; no jitter is added.
+
+Independent, shared-factor and observation-mask RNG streams are separate.
+Sorting exact person, trait and factor IDs internally makes permutations of
+those axes preserve individual draws, while output order stays as supplied.
+Changing the cohort or trait set need not preserve realizations. Changing only
+observation probabilities preserves complete outcomes. To simulate MAR or MNAR,
+generate complete outcomes, derive declared probabilities from measured inputs
+or complete truth respectively, then repeat with the same seed and those
+probabilities. Retain the formula in `missingness_description`. This generates
+informative missingness; it does not correct its bias.
+
+Complete-case removal and imputation are not performed. People with no recorded
+traits remain in the output, and `observed_values` uses NaN for unrecorded cells.
+Arrays are owned and read-only. A deterministic scientific signature covers
+inputs, mechanism records, numerical choices and complete/observed outputs;
+transport artifacts still need separate checksums.
+
+The default preflight bounds256 traits,1billion estimated element visits and
+256MiB of principal array allocations, including wide coefficient matrices.
+Caller-resident arrays, metadata and numerical-library allocator overhead are
+excluded. This reference implementation has no demonstrated biobank throughput.
+Binary/count heads, genotype contamination and association calibration remain
+separate work.
 
 For a small numerical test environment without the unrelated EHR/LLM stack:
 
 ```bash
 uv venv --python 3.12 .venv-simulation
 uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
-.venv-simulation/bin/python -m pytest tests/test_genealogy.py -q
+.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py -q
 ```
 
 These tests load the optional numerical module directly. The repository's
