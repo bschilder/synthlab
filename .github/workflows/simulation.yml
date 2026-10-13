@@ -6,9 +6,12 @@ on:
     paths:
       - 'synthlab/genealogy.py'
       - 'synthlab/genotype_phenotypes.py'
+      - 'synthlab/association_bundle.py'
       - 'tests/test_genealogy.py'
       - 'tests/test_genotype_phenotypes.py'
       - 'tests/numerical_modules.py'
+      - 'tests/test_association_bundle.py'
+      - 'scripts/generate_association_bundle.py'
       - 'requirements/simulation-test.*'
       - '.github/workflows/simulation.yml'
       - 'pyproject.toml'
@@ -42,4 +45,4 @@ jobs:
           uv venv --python '${{ matrix.python }}' .venv-simulation
           uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
       - name: Test true genealogies, phased genotypes and quantitative phenotypes
-        run: .venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py -q
+        run: .venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py tests/test_association_bundle.py -q

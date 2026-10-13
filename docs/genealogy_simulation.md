@@ -151,12 +151,73 @@ excluded. This reference implementation has no demonstrated biobank throughput.
 Binary/count heads, genotype contamination and association calibration remain
 separate work.
 
+## Verified external association bundles
+
+`synthlab.association_bundle.write_association_bundle` verifies the genealogy's
+logical signature, original person-to-individual join, exact site coordinates,
+literal allele order and diploid calls against the tree sequence. It then calls
+the quantitative generator directly on those verified genotypes; phenotype
+options cannot replace person, variant, allele or genotype join arguments.
+Caller-supplied variant IDs follow site order, and trait units follow trait order.
+
+The writer creates a fresh directory, preserves existing paths, writes the
+original `truth.trees` plus uncompressed numeric `.npy` arrays with pickle
+disabled, and publishes `manifest.json` last. Failure removes only its fresh
+directory. The manifest records exact IDs, axes, phase/coordinate/time
+conventions, recipes, logical signatures, source revision, and SHA256/bytes/
+shape/dtype for every payload. Inputs, complete biological/environmental truth
+and observed outcomes remain separate. Preserve the returned manifest SHA256
+separately as the consumer's trusted transport pin; checksums do not establish
+an untrusted producer's authenticity.
+
+The standalone `scripts/generate_association_bundle.py` entry point works in
+the minimal simulation environment without importing the unrelated EHR stack.
+Save this example as `recipe.json`:
+
+```json
+{
+  "genealogy": {
+    "sample_ids": ["a", "b", "c", "d"], "sequence_length": 1000,
+    "seed": 91, "population_size": 100, "mutation_rate": 0.0001,
+    "dtwf_generations": 5
+  },
+  "reference": "synthetic ancestral-reference coordinates", "contig": "simulation-1",
+  "trait_units": ["expression units", "height units"],
+  "phenotypes": {
+    "trait_ids": ["expression", "height"], "effects": [],
+    "covariate_ids": ["intercept"], "covariates": [[1], [1], [1], [1]],
+    "covariate_effects": [[5, -2]], "residual_covariance": [[1, 0.2], [0.2, 2]],
+    "seed": 113
+  }
+}
+```
+
+```bash
+.venv-simulation/bin/python scripts/generate_association_bundle.py \
+  --recipe recipe.json --destination new-association-bundle \
+  --source-revision "$(git rev-parse HEAD)"
+```
+
+The JSON receipt on stdout reports the manifest path, SHA256 and total file
+bytes. This initial CLI uses the single-deme genealogy configuration and assigns
+variant IDs `site-<zero-based-position>`. Mechanism lists contain the dataclass
+fields documented above, using those exact IDs. The programmatic writer also
+accepts validated custom-demography genealogy output. No seed or locus is chosen
+by inspecting association performance.
+
+The format is an experimental version0 quantitative true-SNP interchange, not
+a real-cohort importer or a calibrated association result. Defaults bound output
+to256MiB, the manifest to16MiB and genotype verification to1million person-site
+comparisons. These output limits do not bound parser/simulator process RSS.
+Run simulation in an external environment when benchmarking CuEvo, and pass only
+the data files and pinned receipt across that process boundary.
+
 For a small numerical test environment without the unrelated EHR/LLM stack:
 
 ```bash
 uv venv --python 3.12 .venv-simulation
 uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
-.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py -q
+.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py tests/test_association_bundle.py -q
 ```
 
 These tests load the optional numerical module directly. The repository's
