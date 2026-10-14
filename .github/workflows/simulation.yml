@@ -5,9 +5,11 @@ on:
     branches: [main]
     paths:
       - 'synthlab/genealogy.py'
+      - 'synthlab/genealogical_covariance.py'
       - 'synthlab/genotype_phenotypes.py'
       - 'synthlab/association_bundle.py'
       - 'tests/test_genealogy.py'
+      - 'tests/test_genealogical_covariance.py'
       - 'tests/test_genotype_phenotypes.py'
       - 'tests/numerical_modules.py'
       - 'tests/test_association_bundle.py'
@@ -44,5 +46,5 @@ jobs:
         run: |
           uv venv --python '${{ matrix.python }}' .venv-simulation
           uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
-      - name: Test true genealogies, phased genotypes and quantitative phenotypes
-        run: .venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py tests/test_association_bundle.py -q
+      - name: Test true genealogies, independent covariance and quantitative phenotypes
+        run: .venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py tests/test_genealogical_covariance.py tests/test_association_bundle.py -q
