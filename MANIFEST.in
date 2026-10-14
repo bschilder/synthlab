@@ -6,3 +6,4 @@ include requirements/simulation-test.in
 include requirements/simulation-test.lock
 include docs/genealogy_simulation.md
 include scripts/generate_association_bundle.py
+include scripts/generate_association_batch.py
