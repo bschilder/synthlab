@@ -257,11 +257,111 @@ Save this example as `recipe.json`:
 ```
 
 The JSON receipt on stdout reports the manifest path, SHA256 and total file
-bytes. This initial CLI uses the single-deme genealogy configuration and assigns
-variant IDs `site-<zero-based-position>`. Mechanism lists contain the dataclass
-fields documented above, using those exact IDs. The programmatic writer also
-accepts validated custom-demography genealogy output. No seed or locus is chosen
-by inspecting association performance.
+bytes. It also reports the canonical JSON recipe SHA256 and any independent
+genealogical environmental components. Variant IDs are
+`site-<zero-based-position>`. Mechanism lists contain the dataclass fields
+documented above, using those exact IDs. No seed or locus is chosen by inspecting
+association performance.
+
+### Demographic and environmental recipes
+
+`synthlab.association_recipes.write_association_recipe` executes the same JSON
+recipe programmatically. Optional fields extend the single-deme example:
+
+```json
+{
+  "demography": {
+    "graph": {
+      "time_units": "generations",
+      "demes": [
+        {"name": "root", "epochs": [{"start_size": 200}]},
+        {"name": "left", "ancestors": ["root"], "start_time": 40,
+         "epochs": [{"start_size": 100}]},
+        {"name": "right", "ancestors": ["root"], "start_time": 40,
+         "epochs": [{"start_size": 100}]},
+        {"name": "mixed", "ancestors": ["left", "right"],
+         "proportions": [0.25, 0.75], "start_time": 5,
+         "epochs": [{"start_size": 100}]}
+      ],
+      "migrations": [{"demes": ["left", "right"], "rate": 0.01}]
+    },
+    "sample_demes": ["mixed", "left", "right", "mixed"]
+  },
+  "genealogical_environment": [
+    {"id": "whole", "variance": 0.5, "upper_time": null},
+    {"id": "recent", "variance": 2, "lower_time": 0,
+     "upper_time": 20, "normalization": "none"}
+  ]
+}
+```
+
+Add these fields to the complete four-person recipe; this fragment alone is
+not a complete recipe. The standard Demes graph describes size histories,
+migration and admixture, with one exact generating deme per person. msprime
+converts Demes time units to generations, including graphs specified in years
+with `generation_time`. These names describe the generator, not mandatory
+ancestry categories for association. See the
+[msprime Demes interface](https://tskit.dev/msprime/docs/stable/demography.html#importing-exporting-demes-models).
+
+Each environmental component has a unique ID and nonnegative variance.
+Optional time-band, centering and normalization settings follow the independent
+oracle above; `upper_time: null` means infinity. The producer appends
+`sqrt(variance) * B` to any explicit household/environment factors in
+`phenotypes`, preserving their IDs and independent noise sources. Covariance
+contributions add. Zero weights remain recorded, and explicitly unnormalized
+empty bands preserve zero-width factor axes. No environmental contribution is
+treated as a causal genetic effect.
+
+Keep the original recipe and the complete stdout receipt with the bundle.
+The receipt records each unscaled oracle's scientific signature and provenance;
+the bundle stores the actual scaled factors. The canonical recipe SHA256 uses
+sorted JSON keys, compact separators and finite numbers. It differs from a
+raw-file transport checksum. Duplicate JSON keys, nonfinite JSON constants and
+unsupported recipe fields are rejected.
+
+For planted additive effects whose site is unknown before simulating mutations,
+add `"effect_rules": [{"rule": "first_biallelic_minor_copies",
+"minimum_copies": 4, "effects": [0.8, -0.4]}]`. This selects the first
+coordinate-ordered biallelic locus with at least four copies of each allele,
+using complete genotype truth alone, and plants the signed trait coefficients
+for allele index1. Changing observation probabilities leaves both the choice
+and complete outcomes unchanged. No eligible locus causes a retained failure,
+without resimulation or seed replacement. `resolved_effect_rules` in the receipt
+records the exact selected allele; the bundle's quantitative provenance records
+its actual mechanism. A zero planted coefficient does not establish a marginal
+association null at linked variants; conditional hypotheses remain the
+benchmark's responsibility.
+
+### Streaming independent panels
+
+`scripts/generate_association_batch.py` consumes a fixed JSONL file, one
+`{"case_id": "unique-safe-name", "recipe": <complete recipe>}` per line.
+Each recipe supplies its own genealogy and phenotype seeds. Freeze the
+recipe file before evaluating association results. The worker does not select,
+retry or reseed panels.
+
+```bash
+.venv-simulation/bin/python scripts/generate_association_batch.py \
+  --recipes registered-recipes.jsonl --destination new-panel-batch \
+  --source-revision "$(git rev-parse HEAD)"
+```
+
+The worker imports the optional numerical modules once and processes one panel
+at a time. It preserves consumed original bytes in `recipes.jsonl`, flushes a
+terminal success/failure record per attempted line to `records.jsonl`, and writes
+counts and consumed-input SHA256 in `completed.json`. A failed case remains in
+place in the journal, later registered cases still run, and the process exits
+nonzero if any failed. Existing output directories are preserved. Each successful
+case has its own verified bundle and full producer receipt.
+
+The default per-line input limit is16MiB and per-bundle output limit256MiB,
+matching the single-panel interchange limits. An overlong line stops processing:
+its retained prefix is explicitly labeled, and `complete_input=false` declares
+the remaining input unattempted. Such a prefix SHA256 is not presented as the
+full line's checksum. Partial input or missing registered cases cannot count as
+successful calibration scans. Preserve partial output after interruptions.
+These small-panel simulation and transport checks establish no association
+calibration or biobank throughput.
 
 The format is an experimental version0 quantitative true-SNP interchange, not
 a real-cohort importer or a calibrated association result. Defaults bound output
@@ -275,7 +375,7 @@ For a small numerical test environment without the unrelated EHR/LLM stack:
 ```bash
 uv venv --python 3.12 .venv-simulation
 uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
-.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genealogical_covariance.py tests/test_genotype_phenotypes.py tests/test_association_bundle.py -q
+.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py tests/test_genealogical_covariance.py tests/test_association_recipes.py tests/test_association_bundle.py -q
 ```
 
 These tests load the optional numerical module directly. The repository's
