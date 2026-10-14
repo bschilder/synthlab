@@ -151,6 +151,64 @@ excluded. This reference implementation has no demonstrated biobank throughput.
 Binary/count heads, genotype contamination and association calibration remain
 separate work.
 
+## Independent genealogy-correlated environmental truth
+
+`synthlab.genealogical_covariance.genealogical_environment_factors` builds an
+independent dense covariance oracle directly from explicit descendants of each
+branch of every marginal tree. It imports no association-analysis code. For
+person `i` and branch `e`, the feature is the fraction of that person's two
+declared haplotypes below the branch, multiplied by the square root of the
+branch's genomic span fraction times its duration in the requested time band.
+Summing outer products of these features gives the environmental covariance.
+
+```python
+from synthlab.genealogical_covariance import genealogical_environment_factors
+
+environment = genealogical_environment_factors(
+    truth.tree_sequence,
+    sample_ids=truth.sample_ids,
+    sample_node_pairs=truth.sample_node_pairs,
+    lower_time=0,
+    upper_time=float('inf'),
+)
+# Supply these arguments to simulate_quantitative_phenotypes, alongside its
+# genotype, fixed-effect, trait-covariance and seed arguments:
+phenotype_environment_options = {
+    'residual_row_factors': environment.factors,
+    'residual_factor_ids': environment.factor_ids,
+}
+```
+
+Default centering uses all declared people, independently of phenotype
+availability. Mean-trace normalization makes the average covariance diagonal
+one. Reference-only tips contribute to the genealogy without becoming phenotype
+rows. `lower_time` and `upper_time` select explicit branch-time bands in the
+tree sequence's known time units; no ancestry labels are required.
+
+Reduced QR of the transposed feature matrix compresses the returned factor
+`B` to at most one column per person while preserving `B @ B.T`. Singular
+centered covariances need no diagonal jitter or eigenvalue clipping. Factor
+coordinates are compressed basis coordinates rather than named ancestral
+nodes. Canonical person-ID order and fixed QR signs preserve factor realizations
+by exact ID when input rows are permuted, within the same numerical environment.
+Changing the people or graph need not preserve realizations. Output order
+matches the caller, and arrays are owned and read-only.
+
+The returned covariance is the actual numerical `B @ B.T`. With
+`residual_row_factors=sqrt(tau)*B`, the quantitative generator's person
+covariance is `I + tau*(B @ B.T)`, tensor-multiplied by its actual trait sampling
+covariance. This models genealogy-correlated environmental confounding; it does
+not imply a causal genetic effect or heritability. Retain the covariance
+provenance and scientific signature separately from the transport manifest.
+
+Defaults bound this truth reference to2048 people,1million branch columns,
+1billion estimated scalar operations and256MiB of principal array allocations.
+Traversal, QR and covariance allocation are preflighted. Resident tree tables,
+Python metadata and library allocator overhead are outside these array bounds.
+This implementation establishes small-panel truth, with no demonstrated
+biobank construction speed. Empty time bands return zero factors only when
+`normalization='none'`; attempting to normalize them raises an error.
+
 ## Verified external association bundles
 
 `synthlab.association_bundle.write_association_bundle` verifies the genealogy's
@@ -217,7 +275,7 @@ For a small numerical test environment without the unrelated EHR/LLM stack:
 ```bash
 uv venv --python 3.12 .venv-simulation
 uv pip sync --python .venv-simulation/bin/python --require-hashes requirements/simulation-test.lock
-.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genotype_phenotypes.py tests/test_association_bundle.py -q
+.venv-simulation/bin/python -m pytest tests/test_genealogy.py tests/test_genealogical_covariance.py tests/test_genotype_phenotypes.py tests/test_association_bundle.py -q
 ```
 
 These tests load the optional numerical module directly. The repository's
