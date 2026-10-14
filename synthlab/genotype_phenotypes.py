@@ -19,7 +19,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from .genealogy import _identifiers, _positive_integer, simulation_stream_seeds
+from .genealogy import _identifiers, _positive_integer
 
 
 def _ordered(values: Sequence[Any], name: str) -> tuple[Any, ...]:
@@ -216,11 +216,31 @@ def _covariance_factor(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict
     )
 
 
-def _child_seed(parent: int, name: str) -> int:
-    return int.from_bytes(
-        hashlib.sha256(json.dumps(["quantitative-v0", parent, name]).encode()).digest()[:8],
-        "little",
-    )
+def quantitative_stream_seeds(seed: int) -> Mapping[str, int]:
+    """Named positive uint128 PCG64 seeds from the original signed64 master.
+
+    Avoid the uint32 intermediary required by msprime's separate tree streams.
+    Expanding a repeated uint32 parent cannot restore independent state keys.
+    Derivation depends on master, versioned namespace and role only; permutation
+    and observation-probability changes do not change these keys. Recorded keys
+    support reproducible pseudorandom scheduling, not an independence theorem.
+    """
+    _positive_integer(seed, "seed")
+    if seed >= 2**63:
+        raise ValueError("seed must fit a positive signed 64-bit integer")
+    result = {}
+    for channel in ("residual_iid", "residual_shared", "missingness"):
+        counter = 0
+        while True:
+            payload = json.dumps(
+                ["quantitative-pcg64-128-v1", seed, channel, counter], separators=(",", ":")
+            ).encode()
+            value = int.from_bytes(hashlib.sha256(payload).digest()[:16], "little")
+            if value and value not in result.values():
+                result[channel] = value
+                break
+            counter += 1
+    return MappingProxyType(result)
 
 
 def _hash_array(digest: Any, name: str, values: np.ndarray, *, row_block: int) -> None:
@@ -455,12 +475,7 @@ def simulate_quantitative_phenotypes(
         genetic = sum(means.values(), start=np.zeros((n, p)))
         fixed = x @ coefficients
         nuisance = fixed + environment
-    base_seeds = simulation_stream_seeds(seed)
-    seeds = {
-        "residual_iid": _child_seed(base_seeds["phenotype"], "iid"),
-        "residual_shared": _child_seed(base_seeds["phenotype"], "shared"),
-        "missingness": base_seeds["missingness"],
-    }
+    seeds = quantitative_stream_seeds(seed)
     row_order = np.asarray(sorted(range(n), key=people.__getitem__), dtype=np.int64)
     trait_order = np.asarray(sorted(range(p), key=traits.__getitem__), dtype=np.int64)
     factor_order = np.asarray(sorted(range(q), key=factor_names.__getitem__), dtype=np.int64)
@@ -519,7 +534,9 @@ def simulate_quantitative_phenotypes(
             "residual_model": "sampling_covariance tensor (I + A A.T); environmental, independent of genetic mean",
             "covariance_factorization": covariance_checks,
             "seed": seed,
-            "stream_seeds": seeds,
+            "rng_scheme": "quantitative-pcg64-128-v1",
+            "stream_seeds": {name: f"0x{value:032x}" for name, value in seeds.items()},
+            "stream_seed_encoding": "lossless hexadecimal uint128; Python result retains integer seed values",
             "rng": "NumPy PCG64; canonical person,trait,factor order; separate iid/shared/mask streams",
             "missingness_description": description,
             "numpy_version": version("numpy"),

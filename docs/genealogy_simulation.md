@@ -138,6 +138,24 @@ or complete truth respectively, then repeat with the same seed and those
 probabilities. Retain the formula in `missingness_description`. This generates
 informative missingness; it does not correct its bias.
 
+`quantitative_stream_seeds(seed)` derives positive 128-bit NumPy PCG64 state keys
+directly from the original signed 64-bit master and each named role. The versioned
+scheme is `quantitative-pcg64-128-v1`. It avoids compressing phenotype seeds
+through the 32-bit state keys needed by msprime's separate genealogy engine.
+An audit of a 105,000-case draft found distinct master seeds that repeated both
+Gaussian noise keys, plus another repeated mask key. None repeated within an
+individual 5000-case setting in that draft; the repair removes the compression
+bottleneck before larger campaigns.
+
+Python results retain integer state keys. JSON provenance records fixed-width
+hexadecimal strings, preserving all bits in readers that use floating-point JSON
+numbers. `int(value,16)` recovers the integer for PCG64. The scheme change alters
+seeded phenotype realizations relative to earlier source revisions. Retain the
+exact source pin and recorded scheme when replaying old runs. Genealogy/mutation
+seed derivation remains unchanged. Distinct recorded state keys support ordinary
+pseudorandom simulation practice; they are not a proof of statistical
+independence for arbitrary PRNGs or sampling designs.
+
 Complete-case removal and imputation are not performed. People with no recorded
 traits remain in the output, and `observed_values` uses NaN for unrecorded cells.
 Arrays are owned and read-only. A deterministic scientific signature covers
