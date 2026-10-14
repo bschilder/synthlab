@@ -126,6 +126,55 @@ def test_residual_draws_match_independent_canonical_order_cholesky_formula():
     np.testing.assert_allclose(result.residuals, result.independent_residuals)
 
 
+def test_distinct_master_seeds_do_not_reuse_known_colliding_gaussian_streams():
+    # Metadata audit of the frozen draft found the same uint32 intermediate.
+    first = simulate(seed=7494693928700945653, residual_covariance=np.eye(2))
+    second = simulate(seed=7062127190484666175, residual_covariance=np.eye(2))
+    assert first.stream_seeds["residual_iid"] != second.stream_seeds["residual_iid"]
+    assert first.stream_seeds["residual_shared"] != second.stream_seeds["residual_shared"]
+    assert not np.array_equal(first.independent_residuals, second.independent_residuals)
+
+
+def test_distinct_master_seeds_do_not_reuse_known_colliding_mask_state():
+    first = simulate(seed=2881303302047735690)
+    second = simulate(seed=6228104137962913151)
+    assert first.stream_seeds["missingness"] != second.stream_seeds["missingness"]
+
+
+def test_numpy_quantitative_streams_use_full_width_immutable_named_seeds():
+    seeds = engine().quantitative_stream_seeds(91)
+    assert set(seeds) == {"residual_iid", "residual_shared", "missingness"}
+    assert len(set(seeds.values())) == 3
+    assert all(type(value) is int and 2**64 < value < 2**128 for value in seeds.values())
+    # Fixed compact-JSON/SHA256/little-endian v1 protocol, independently calculated.
+    assert {name: f"0x{value:032x}" for name, value in seeds.items()} == {
+        "residual_iid": "0xc0b83cc3d9b730b4bde9d993eb8639e2",
+        "residual_shared": "0xf6c6925d1d1f40bbf9f4e8ed13c9370b",
+        "missingness": "0x4b4f7cbd3d2e79baa4374d0d99a55364",
+    }
+    assert seeds == engine().quantitative_stream_seeds(91)
+    with pytest.raises(TypeError):
+        seeds["missingness"] = 1
+
+
+def test_full_width_seed_provenance_is_lossless_hex_not_json_float_precision():
+    result = simulate(residual_covariance=np.eye(2))
+    provenance = json.loads(result.provenance)
+    assert provenance["rng_scheme"] == "quantitative-pcg64-128-v1"
+    recorded = provenance["stream_seeds"]
+    assert all(
+        isinstance(value, str) and len(value) == 34 and value.startswith("0x")
+        for value in recorded.values()
+    )
+    assert {name: int(value, 16) for name, value in recorded.items()} == result.stream_seeds
+
+
+@pytest.mark.parametrize("seed", [True, -1, 0, 2**63])
+def test_full_width_stream_helper_preserves_master_seed_input_contract(seed):
+    with pytest.raises(ValueError):
+        engine().quantitative_stream_seeds(seed)
+
+
 def test_row_and_trait_permutations_preserve_person_specific_realizations():
     covariance = np.array([[2.0, 0.5], [0.5, 1.0]])
     probabilities = np.array([[0.2, 0.8], [1.0, 0.0], [0.5, 0.5]])
